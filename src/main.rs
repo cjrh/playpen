@@ -1,5 +1,26 @@
 // systemd-run --user -p MemoryMax=1G your_command_here
-
+//
+/*
+$ systemd-run --user -p MemoryMax=50M -p CPUQuota=5% --shell
+Running as unit: run-u286.service; invocation ID: 9eb715f0ee2e4967a00096ca07dbf9c6
+Press ^] three times within 1s to disconnect TTY.
+~/Documents/repos/playpen  ±main|↻1…2
+$ python3
+Python 3.12.3 (main, Nov  6 2024, 18:32:19) [GCC 13.2.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> x = [0] * 2**5
+>>> x = [0] * 2**10
+>>> x = [0] * 2**20
+>>> x = [0] * 2**25
+Killed
+~/Documents/repos/playpen  ±main|↻1…2
+$ python3
+Finished with result: oom-kill
+Main processes terminated with: code=killed/status=KILL
+Service runtime: 3min 2.701s
+CPU time consumed: 745ms
+Memory peak: 50.0M
+*/
 use clap::{Arg, Command, ArgAction};
 use nix::unistd::{execvp, getpid};
 use std::ffi::CString;
