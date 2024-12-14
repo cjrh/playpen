@@ -13,6 +13,9 @@ struct Run {
     #[clap(short, long)]
     cpu_limit: Option<String>,
 
+    #[clap(short, long, default_value = "false")]
+    quiet: bool,
+
     #[clap()]
     command_and_args: Vec<String>,
 }
@@ -21,7 +24,7 @@ fn main() -> Result<()> {
     let cli = Run::parse();
 
     let mut parts = vec!["systemd-run".to_string()];
-    let base_command = "--user --same-dir --wait --pipe --quiet";
+    let base_command = "--user --same-dir --wait --pipe";
     parts.extend(
         base_command.split_whitespace().map(String::from)
     );
@@ -29,6 +32,10 @@ fn main() -> Result<()> {
     // Only add --pty if we are attached to a terminal
     if atty::is(Stream::Stdout) && atty::is(Stream::Stdin) {
         parts.push("--pty".to_string());
+    }
+
+    if cli.quiet {
+        parts.push("--quiet".to_string());
     }
 
     if let Some(memory_limit) = cli.memory_limit {
