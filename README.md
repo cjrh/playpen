@@ -23,13 +23,13 @@ it exceeds the 50 MB memory limit given:
 
 ```
 $ playpen -m 50M python3
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
-     Running `target/debug/playpen -m 50M python3`
 Running as unit: run-u544.service; invocation ID: 0bf06fd9a32b4e619993845b58066edd
 Press ^] three times within 1s to disconnect TTY.
+
 Python 3.12.3 (main, Nov  6 2024, 18:32:19) [GCC 13.2.0] on linux
 Type "help", "copyright", "credits" or "license" for more information.
 >>> x = [0] * 2**30
+
 Finished with result: oom-kill
 Main processes terminated with: code=killed/status=KILL
 Service runtime: 11.423s
