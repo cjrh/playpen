@@ -20,6 +20,44 @@ Main processes terminated with: code=killed/status=KILL
 Service runtime: 3min 2.701s
 CPU time consumed: 745ms
 Memory peak: 50.0M
+
+
+
+function run() {
+    # Now we'll make a version of `run` that will receive the memory limit and CPU quota
+    # from env vars. The invocation will look like this:
+    #
+    #     MEM=50M CPU=100% run python3 main.py -arg1 --arg2
+    #
+    # If `MEM` is not specified, it will default to 50M. If `CPU` is not specified, it will
+    # default to 100%, which is 1 core.
+    #
+    # TODO:
+    # - See: https://www.man7.org/linux/man-pages/man5/systemd.resource-control.5.html
+    # - IPAccounting, IPAddressAllow could be quite interesting
+    # - SocketBindAllow could be useful for restricting network access
+    local memory="${MEM:-50M}"
+    local cpu="${CPU:-100%}"
+    local cpu_allowed="${CPU_ALLOWED:-1,2,3,4}"
+    systemd-run --user --pty --wait --pipe \
+        -p MemoryMax="$memory" \
+        -p MemorySwapMax=0 \
+        -p CPUQuota="$cpu" \
+        -p CPUQuotaPeriodSec=100ms \
+        -p AllowedCPUs="$cpu_allowed" \
+        "$@"
+}
+
+
+
+
+
+
+
+
+
+
+
 */
 use clap::{Arg, Command, ArgAction};
 use nix::unistd::{execvp, getpid};
