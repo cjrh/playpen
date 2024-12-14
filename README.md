@@ -1,5 +1,4 @@
 ![playpen](playpen_transparent2.png)
-![playpen](playpen.jpg)
 
 # playpen
 Program launcher with memory and cpu limits
