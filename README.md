@@ -1,7 +1,15 @@
+![playpen](playpen_transparent2.png)
+![playpen](playpen.jpg)
+
 # playpen
 Program launcher with memory and cpu limits
 
-![playpen](playpen_transparent2.png)
+## Overview
+
+I wanted a way to run a program with memory and CPU limits. It turns out
+that `systemd-run` does exactly this, _and it doesn't require root_, but
+the necessary parameters are many and confusing. So playpen wraps all that
+up in a simple CLI which is set up for the typical use cases I have.
 
 ## CLI Docs
 

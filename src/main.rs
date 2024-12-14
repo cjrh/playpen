@@ -2,6 +2,7 @@ use clap::Parser;
 use nix::unistd::execvp;
 use std::ffi::CString;
 use anyhow::Result;
+use atty::Stream;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -20,10 +21,15 @@ fn main() -> Result<()> {
     let cli = Run::parse();
 
     let mut parts = vec!["systemd-run".to_string()];
-    let base_command = "--user --same-dir --pty --wait --pipe";
+    let base_command = "--user --same-dir --wait --pipe --quiet";
     parts.extend(
         base_command.split_whitespace().map(String::from)
     );
+
+    // Only add --pty if we are attached to a terminal
+    if atty::is(Stream::Stdout) && atty::is(Stream::Stdin) {
+        parts.push("--pty".to_string());
+    }
 
     if let Some(memory_limit) = cli.memory_limit {
         parts.push(format!("-pMemoryMax={}", memory_limit));
