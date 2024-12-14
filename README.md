@@ -1,6 +1,10 @@
 # playpen
 Program launcher with memory and cpu limits
 
+Insert local image `playpen.jpg` here:
+
+![playpen](playpen.jpg)
+
 ## CLI Docs
 
 ```
