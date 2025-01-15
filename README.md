@@ -105,7 +105,7 @@ so if `capture-env` is on, `capture-path` is ignored.
 This also applies to env vars supplied on the path:
 
 ```bash
-ABC=123 playpen --capture-env=on -- bash -c 'env'
+$ ABC=123 playpen --capture-env=on -- bash -c 'env'
 <snip>
 ABC=123
 <snip>
@@ -125,7 +125,7 @@ serve a web application in a development environment. An invocation for
 this looks like this:
 
 ```bash
-$ playpen -4G --capture-env=on -- npm run dev
+$ playpen -m 4G --capture-env=on -- npm run dev
 ```
 
 Occasionally this dev servers get memory leaks, making playpen more
