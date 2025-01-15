@@ -20,11 +20,13 @@ Arguments:
   [COMMAND_AND_ARGS]...  
 
 Options:
-  -m, --memory-limit <MEMORY_LIMIT>  
-  -c, --cpu-limit <CPU_LIMIT>        
-  -q, --quiet                        
-  -h, --help                         Print help
-  -V, --version                      Print version
+  -m, --memory-limit <MEMORY_LIMIT>                
+  -c, --cpu-limit <CPU_LIMIT>                      
+  -q, --quiet                                      
+      --capture-environment <CAPTURE_ENVIRONMENT>  [default: false] [possible values: true, false]
+      --capture-path <CAPTURE_PATH>                [default: true] [possible values: true, false]
+  -h, --help                                       Print help
+  -V, --version                                    Print version
 ```
 
 ## Demo

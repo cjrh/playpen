@@ -1,4 +1,7 @@
 use clap::Parser;
+use clap::builder::BoolishValueParser;
+use clap::builder::TypedValueParser as _;
+use clap::ArgAction;
 use nix::unistd::execvp;
 use std::ffi::CString;
 use anyhow::Result;
@@ -16,6 +19,12 @@ struct Run {
     #[clap(short, long, default_value = "false")]
     quiet: bool,
 
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "false")]
+    capture_environment: bool,
+
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true")]
+    capture_path: bool,
+
     #[clap()]
     command_and_args: Vec<String>,
 }
@@ -28,6 +37,29 @@ fn main() -> Result<()> {
     parts.extend(
         base_command.split_whitespace().map(String::from)
     );
+
+    // Include all env vars in the calling environment
+    if cli.capture_environment {
+        for (key, value) in std::env::vars() {
+
+            // Skip the environment variables that systemd-run sets
+            if key == "DBUS_SESSION_BUS_ADDRESS" {
+                continue;
+            }
+
+            // Skip env vars that are actually exported bash functions
+            // These are not supported by systemd-run.
+            if key.starts_with("BASH_FUNC_") && key.ends_with("%%") {
+                continue;
+            }
+
+            parts.push(format!(r#"--setenv={}="{}""#, key, value));
+        }
+    } else if cli.capture_path {
+        if let Some(path) = std::env::var_os("PATH") {
+            parts.push(format!(r#"--setenv=PATH="{}""#, path.to_string_lossy()));
+        }
+    }
 
     // Only add --pty if we are attached to a terminal
     if atty::is(Stream::Stdout) && atty::is(Stream::Stdin) {
