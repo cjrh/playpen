@@ -20,7 +20,7 @@ struct Run {
     quiet: bool,
 
     #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "false")]
-    capture_environment: bool,
+    capture_env: bool,
 
     #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true")]
     capture_path: bool,
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     );
 
     // Include all env vars in the calling environment
-    if cli.capture_environment {
+    if cli.capture_env {
         for (key, value) in std::env::vars() {
 
             // Skip the environment variables that systemd-run sets
