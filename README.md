@@ -1,5 +1,7 @@
 ![playpen](playpen_transparent2.png)
 
+Download button: [![Download](https://api.bintray.com/packages/anderspitman/generic/playpen/images/download.svg) ](https://bintray.com/anderspitman/generic/playpen/_latestVersion)
+
 # playpen
 Program launcher with memory and cpu limits
 
