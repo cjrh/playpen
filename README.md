@@ -23,7 +23,7 @@ Options:
   -m, --memory-limit <MEMORY_LIMIT>                
   -c, --cpu-limit <CPU_LIMIT>                      
   -q, --quiet                                      
-      --capture-environment <CAPTURE_ENVIRONMENT>  [default: false] [possible values: true, false]
+      --capture-env <CAPTURE_ENV>  [default: false] [possible values: true, false]
       --capture-path <CAPTURE_PATH>                [default: true] [possible values: true, false]
   -h, --help                                       Print help
   -V, --version                                    Print version
@@ -92,6 +92,44 @@ For CPU, "100%" means 1 core, "200%" means 2 cores, and so on. This can
 be used to force a process to run on fewer than all available cores
 on a machine if the process does not have a simple, built-in way to limit 
 itself.
+
+## Capturing `$PATH` and the environment
+
+By default, `playpen` captures the `$PATH`, sending this through to
+the underlying `systemd-run` command. However, the environment is not
+captured by default, for safety reasons. This can result in errors if
+your task invocation relies on environment variables in your calling
+environment. Note that `capture-env` supercedes `capture-path` if enabled,
+so if `capture-env` is on, `capture-path` is ignored.
+
+This also applies to env vars supplied on the path:
+
+```bash
+ABC=123 playpen --capture-env=on -- bash -c 'env'
+<snip>
+ABC=123
+<snip>
+```
+
+But if the option is off, the `ABC` variable is not passed through.
+My suggestion is that you should rather use a `.env` file and have
+your application read that instead of relying on the live environment.
+This is much safer because you won't get inadvertent leakage of
+information unintended for the child process.
+
+There are some interactive use-cases where passing the entire environment
+is very convenient, and where playpen is really just used as a proxy
+for an interactive command. Shells like python are an example of this,
+but also build tools like `npm run dev`, where a dev server runs to 
+serve a web application in a development environment. An invocation for
+this looks like this:
+
+```bash
+$ playpen -4G --capture-env=on -- npm run dev
+```
+
+Occasionally this dev servers get memory leaks, making playpen more
+useful ;).
 
 ## Examples
 
