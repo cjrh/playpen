@@ -16,17 +16,45 @@ up in a simple CLI which is set up for the typical use cases I have.
 $ playpen -h
 Usage: playpen [OPTIONS] [COMMAND_AND_ARGS]...
 
+
 Arguments:
   [COMMAND_AND_ARGS]...  
 
 Options:
-  -m, --memory-limit <MEMORY_LIMIT>                
-  -c, --cpu-limit <CPU_LIMIT>                      
-  -q, --quiet                                      
-      --capture-env <CAPTURE_ENV>  [default: false] [possible values: true, false]
-      --capture-path <CAPTURE_PATH>                [default: true] [possible values: true, false]
-  -h, --help                                       Print help
-  -V, --version                                    Print version
+  -m, --memory-limit <MEMORY_LIMIT>
+          
+  -c, --cpu-limit <CPU_LIMIT>
+          
+  -q, --quiet
+          
+      --capture-env <CAPTURE_ENV>
+          [default: false] [possible values: true, false]
+      --capture-path <CAPTURE_PATH>
+          [default: true] [possible values: true, false]
+      --rw <RW_PATHS>
+          Add read-write path access (can be repeated)
+      --ro <RO_PATHS>
+          Add read-only path access (can be repeated)
+      --inaccessible <INACCESSIBLE>
+          Make path completely inaccessible (can be repeated)
+      --private-tmp <PRIVATE_TMP>
+          Use private /tmp [default: true] [possible values: true, false]
+      --private-devices <PRIVATE_DEVICES>
+          Use private /dev [default: true] [possible values: true, false]
+      --protect-kernel-tunables <PROTECT_KERNEL_TUNABLES>
+          Protect kernel tunables [default: true] [possible values: true, false]
+      --protect-control-groups <PROTECT_CONTROL_GROUPS>
+          Protect control groups [default: true] [possible values: true, false]
+      --protect-home <PROTECT_HOME>
+          Protect home directories: none/yes/read-only/tmpfs [default: none]
+      --protect-system <PROTECT_SYSTEM>
+          Protect system directories: none/yes/full/strict [default: none]
+      --current-dir-only <CURRENT_DIR_ONLY>
+          Restrictive preset: only current directory accessible [default: false] [possible values: true, false]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ## Demo
@@ -130,6 +158,72 @@ $ playpen -m 4G --capture-env=on -- npm run dev
 
 Occasionally this dev servers get memory leaks, making playpen more
 useful ;).
+
+## Path Restrictions
+
+Playpen provides (via `systemd-run`) powerful path access controls to limit what 
+directories and files a process can access, helping to isolate and sandbox programs.
+This is particularly useful when running untrusted code or preventing programs from
+accessing sensitive system files.
+
+### Quick Protection with `--current-dir-only`
+
+The easiest way to enable path restrictions is with the `--current-dir-only` flag,
+which applies a restrictive preset that makes only the current working directory
+accessible to the program with write access.:
+
+```bash
+$ playpen --current-dir-only -m 100M -- npm install
+```
+
+This protects your home directory, system files, and other sensitive locations
+while still allowing the program to work in the current directory where you're
+running it.
+
+### Fine-Grained Path Control
+
+You can override the default restrictions or create custom access patterns using:
+
+- `--ro <path>`: Grant read-only access to a specific path
+- `--rw <path>`: Grant read-write access to a specific path
+- `--inaccessible <path>`: Make a path completely inaccessible
+
+These options can be repeated multiple times to configure exactly the access you need:
+
+```bash
+# Allow read-only access to /usr/lib and read-write to /tmp
+$ playpen --current-dir-only --ro /usr/lib --rw /tmp -m 100M -- my-program
+
+# Make the .env file inaccessible even within current directory
+$ playpen --current-dir-only --inaccessible ./.env -- npm test
+```
+
+### System Protection Options
+
+Additional system-level protections are available:
+
+- `--private-tmp`: Use a private /tmp directory
+- `--private-devices`: Use a private /dev directory
+- `--protect-home <mode>`: Protect home directories (none/yes/read-only/tmpfs)
+- `--protect-system <mode>`: Protect system directories (none/yes/full/strict)
+- `--protect-kernel-tunables`: Protect kernel tunables
+- `--protect-control-groups`: Protect control groups
+
+### Example: Securing npm Commands
+
+When running npm commands, you often want to protect your home directory and
+system files while allowing access to node_modules and the project directory:
+
+```bash
+# Basic protection for npm install
+$ playpen --current-dir-only -m 2G -- npm install
+
+# Allow npm to access its global cache
+$ playpen --current-dir-only --rw ~/.npm -m 2G -- npm install
+
+# Run tests with extra protection
+$ playpen --current-dir-only --private-tmp -m 1G -- npm test
+```
 
 ## Examples
 

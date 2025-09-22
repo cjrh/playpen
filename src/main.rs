@@ -35,16 +35,16 @@ struct Run {
     inaccessible: Vec<String>,
 
     // Protection flags with defaults
-    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /tmp")]
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /tmp")]
     private_tmp: bool,
 
-    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /dev")]
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /dev")]
     private_devices: bool,
 
-    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect kernel tunables")]
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect kernel tunables")]
     protect_kernel_tunables: bool,
 
-    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect control groups")]
+    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect control groups")]
     protect_control_groups: bool,
 
     #[arg(long, default_value = "none", help = "Protect home directories: none/yes/read-only/tmpfs")]
