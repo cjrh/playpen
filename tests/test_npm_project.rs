@@ -34,7 +34,7 @@ fn test_npm_project_without_protection() {
             "--ro", "/run",
             "--ro", "/home/caleb/.local",
             "--rw", temp_dir.path().to_str().unwrap(), // Allow access to temp directory
-            "--", "npm", "run", "test-home"
+            "--", "sh", "-c", "npm run test-home"
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -82,7 +82,7 @@ fn test_npm_project_with_current_dir_only() {
             "--ro", "/etc", // SSL/crypto configuration
             "--ro", "/usr/lib", // System libraries
             "--ro", "/var", // Variable data
-            "--", "npm", "run", "test-home"
+            "--", "sh", "-c", "npm run test-home"
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -126,29 +126,21 @@ fn test_npm_install_with_protection() {
             "--current-dir-only",
             "--ro", "/home/caleb/.local", // Node installation via fnm
             "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--", "npm", "install", "--no-audit", "--no-fund"
+            "--", "sh", "-c", "npm install --no-audit --no-fund --cache ./npm-cache"
         ])
         .output()
         .expect("Failed to execute playpen");
 
-    // npm install should succeed even with path restrictions
-    // If it fails, it might be due to network restrictions or missing system paths
-    // Since our primary goal is testing directory access control, not npm functionality,
-    // we'll check if it fails gracefully rather than requiring it to succeed
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
+    // npm install should succeed with shell wrapper
     if !output.status.success() {
-        // Check if this is a network/DNS issue vs a directory access issue
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Check if this is a network/DNS issue (still possible)
         let error_output = format!("{}{}", stdout, stderr);
         if error_output.contains("getaddrinfo") || error_output.contains("network") ||
            error_output.contains("ENOTFOUND") || error_output.contains("timeout") {
             eprintln!("npm install failed due to network issues, skipping test");
-            return;
-        }
-        // If it's a systemd execution failure, that means our directory restrictions are too tight
-        if error_output.contains("status=203/EXEC") {
-            eprintln!("npm install failed due to execution restrictions - need to add more system paths");
             return;
         }
         panic!("npm install failed with protection. stdout: {}, stderr: {}", stdout, stderr);
@@ -198,8 +190,11 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-const server = app.listen(3001, () => {
-    console.log('Server started on port 3001');
+const server = app.listen(0, () => {
+    const port = server.address().port;
+    console.log(`Server started on port ${port}`);
+    // Write port to file so test can read it
+    require('fs').writeFileSync('./server-port.txt', port.toString());
 });
 
 // Auto-shutdown after 30 seconds for testing
@@ -219,14 +214,23 @@ setTimeout(() => {
             "--current-dir-only",
             "--ro", "/home/caleb/.local", // Node installation via fnm
             "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--", "npm", "install", "--no-audit", "--no-fund"
+            "--", "sh", "-c", "npm install --no-audit --no-fund --cache ./npm-cache"
         ])
         .output()
         .expect("Failed to execute npm install");
 
     if !install_output.status.success() {
-        eprintln!("Skipping express test: npm install failed");
-        return;
+        let stdout = String::from_utf8_lossy(&install_output.stdout);
+        let stderr = String::from_utf8_lossy(&install_output.stderr);
+
+        // Check if this is a network/DNS issue (still possible)
+        let error_output = format!("{}{}", stdout, stderr);
+        if error_output.contains("getaddrinfo") || error_output.contains("network") ||
+           error_output.contains("ENOTFOUND") || error_output.contains("timeout") {
+            eprintln!("Skipping express test: npm install failed due to network issues");
+            return;
+        }
+        panic!("npm install failed in express test. stdout: {}, stderr: {}", stdout, stderr);
     }
 
     // Test without protection
@@ -237,17 +241,32 @@ setTimeout(() => {
             "--ro", "/usr", "--ro", "/lib", "--ro", "/lib64", "--ro", "/bin", "--ro", "/sbin",
             "--ro", "/etc", "--ro", "/proc", "--ro", "/sys", "--ro", "/dev", "--ro", "/run",
             "--ro", "/var", "--ro", "/home/caleb/.local", "--rw", "/tmp",
-            "--", "node", "server.js"
+            "--", "sh", "-c", "node server.js"
         ])
         .spawn()
         .expect("Failed to start server without protection");
 
     // Give server time to start
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(3));
+
+    // Read the port from the file
+    let port_file_path = temp_dir.path().join("server-port.txt");
+    let port = if port_file_path.exists() {
+        fs::read_to_string(&port_file_path)
+            .expect("Failed to read port file")
+            .trim()
+            .to_string()
+    } else {
+        eprintln!("Server port file not found, server may not have started properly");
+        let _ = server_without_protection.kill();
+        let _ = server_without_protection.wait();
+        return;
+    };
 
     // Test home access endpoint
+    let curl_url = format!("http://localhost:{}/home", port);
     let curl_output = Command::new("curl")
-        .args(&["-s", "http://localhost:3001/home"])
+        .args(&["-s", &curl_url])
         .output();
 
     // Kill the server
@@ -257,24 +276,40 @@ setTimeout(() => {
     if let Ok(output) = curl_output {
         let response = String::from_utf8_lossy(&output.stdout);
         if response.contains("\"success\":true") {
-            // Now test with protection
+            // Now test with protection - clean up port file first
+            let _ = fs::remove_file(&port_file_path);
+            
             let mut server_with_protection = Command::new(common::get_playpen_path())
                 .current_dir(temp_dir.path())
                 .args(&[
                     "--current-dir-only",
                     "--ro", "/home/caleb/.local", // Node installation via fnm
                     "--ro", "/run/user/1000", // Runtime directory for fnm
-                    "--", "node", "server.js"
+                    "--", "sh", "-c", "node server.js"
                 ])
                 .spawn()
                 .expect("Failed to start server with protection");
 
             // Give server time to start
-            thread::sleep(Duration::from_secs(2));
+            thread::sleep(Duration::from_secs(3));
+
+            // Read the new port from the file
+            let protected_port = if port_file_path.exists() {
+                fs::read_to_string(&port_file_path)
+                    .expect("Failed to read port file for protected server")
+                    .trim()
+                    .to_string()
+            } else {
+                eprintln!("Protected server port file not found, server may not have started properly");
+                let _ = server_with_protection.kill();
+                let _ = server_with_protection.wait();
+                return;
+            };
 
             // Test home access endpoint with protection
+            let protected_curl_url = format!("http://localhost:{}/home", protected_port);
             let protected_curl_output = Command::new("curl")
-                .args(&["-s", "http://localhost:3001/home"])
+                .args(&["-s", &protected_curl_url])
                 .output();
 
             // Kill the server
