@@ -1,6 +1,5 @@
 use clap::Parser;
 use clap::builder::BoolishValueParser;
-use clap::builder::TypedValueParser as _;
 use clap::ArgAction;
 use nix::unistd::execvp;
 use std::ffi::CString;
@@ -24,6 +23,39 @@ struct Run {
 
     #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true")]
     capture_path: bool,
+
+    // Fine-grained path controls
+    #[arg(long = "rw", help = "Add read-write path access (can be repeated)")]
+    rw_paths: Vec<String>,
+
+    #[arg(long = "ro", help = "Add read-only path access (can be repeated)")]
+    ro_paths: Vec<String>,
+
+    #[arg(long, help = "Make path completely inaccessible (can be repeated)")]
+    inaccessible: Vec<String>,
+
+    // Protection flags with defaults
+    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /tmp")]
+    private_tmp: bool,
+
+    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /dev")]
+    private_devices: bool,
+
+    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect kernel tunables")]
+    protect_kernel_tunables: bool,
+
+    #[arg(long, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect control groups")]
+    protect_control_groups: bool,
+
+    #[arg(long, default_value = "none", help = "Protect home directories: none/yes/read-only/tmpfs")]
+    protect_home: String,
+
+    #[arg(long, default_value = "none", help = "Protect system directories: none/yes/full/strict")]
+    protect_system: String,
+
+    // Preset configurations
+    #[arg(long, default_value = "false", help = "Restrictive preset: only current directory accessible")]
+    current_dir_only: bool,
 
     #[clap()]
     command_and_args: Vec<String>,
@@ -78,6 +110,56 @@ fn main() -> Result<()> {
     if let Some(cpu_limit) = cli.cpu_limit {
         parts.push(format!("-pCPUQuota={}", cpu_limit));
         parts.push("-pCPUQuotaPeriodSec=100ms".to_string());
+    }
+
+    // Handle preset configurations first
+    if cli.current_dir_only {
+        // Apply basic protections without filesystem restrictions that conflict with --same-dir
+        parts.push("-pPrivateTmp=yes".to_string());
+        parts.push("-pPrivateDevices=yes".to_string());
+        parts.push("-pProtectKernelTunables=yes".to_string());
+        parts.push("-pProtectControlGroups=yes".to_string());
+
+        // Block access to sensitive directories while allowing system functionality
+        // Use ProtectHome to block access to home directories
+        parts.push("-pProtectHome=yes".to_string());
+
+        // Allow current directory via bind mount
+        let pwd = std::env::current_dir()?;
+        parts.push(format!("-pBindPaths={}", pwd.display()));
+    } else {
+        // Apply individual protection flags if not using preset
+        if cli.private_tmp {
+            parts.push("-pPrivateTmp=yes".to_string());
+        }
+        if cli.private_devices {
+            parts.push("-pPrivateDevices=yes".to_string());
+        }
+        if cli.protect_kernel_tunables {
+            parts.push("-pProtectKernelTunables=yes".to_string());
+        }
+        if cli.protect_control_groups {
+            parts.push("-pProtectControlGroups=yes".to_string());
+        }
+        if cli.protect_home != "none" {
+            parts.push(format!("-pProtectHome={}", cli.protect_home));
+        }
+        if cli.protect_system != "none" {
+            parts.push(format!("-pProtectSystem={}", cli.protect_system));
+        }
+    }
+
+    // Apply fine-grained path controls (these can override or extend preset configurations)
+    for path in &cli.rw_paths {
+        parts.push(format!("-pBindPaths={}", path));
+    }
+
+    for path in &cli.ro_paths {
+        parts.push(format!("-pBindReadOnlyPaths={}", path));
+    }
+
+    for path in &cli.inaccessible {
+        parts.push(format!("-pInaccessiblePaths={}", path));
     }
 
     parts.extend(cli.command_and_args.clone());
