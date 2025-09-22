@@ -122,7 +122,7 @@ fn main() -> Result<()> {
 
         // Block access to sensitive directories while allowing system functionality
         // Use ProtectHome to block access to home directories
-        parts.push("-pProtectHome=yes".to_string());
+        parts.push("-pProtectHome=tmpfs".to_string());
 
         // Allow current directory via bind mount
         let pwd = std::env::current_dir()?;

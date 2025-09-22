@@ -5,6 +5,24 @@ use std::thread;
 
 mod common;
 
+fn npm_config_get(field: &str) -> Option<String> {
+    let output = Command::new("npm")
+        .args(&["config", "get", field])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let cache_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if cache_path.is_empty() {
+        None
+    } else {
+        Some(cache_path)
+    }
+}
+
 #[test]
 fn test_npm_project_without_protection() {
     if !common::npm_available() || !common::node_available() {
@@ -119,14 +137,18 @@ fn test_npm_install_with_protection() {
     fs::write(temp_dir.path().join("package.json"), package_json)
         .expect("Failed to create package.json");
 
+    let npm_cache = npm_config_get("cache").unwrap_or_else(|| "/tmp/npm-cache".to_string());
+    let npm_prefix = npm_config_get("prefix").unwrap().to_string();
+    eprintln!("Using npm cache directory: {}", npm_cache);
+
     // Run npm install with protection - should work
     let output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
+        .args([
             "--current-dir-only",
-            "--ro", "/home/caleb/.local", // Node installation via fnm
-            "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--", "sh", "-c", "npm install --no-audit --no-fund --cache ./npm-cache"
+            "--rw", npm_cache.as_str(), // npm cache
+            "--ro", npm_prefix.as_str(), // npm global packages
+            "--", "sh", "-c", "npm install --no-audit --no-fund"
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -210,11 +232,12 @@ setTimeout(() => {
     // First install dependencies
     let install_output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
+        .args([
             "--current-dir-only",
-            "--ro", "/home/caleb/.local", // Node installation via fnm
-            "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--", "sh", "-c", "npm install --no-audit --no-fund --cache ./npm-cache"
+            "--rw", npm_config_get("cache").unwrap().as_str(), // npm cache
+            "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
+            "--rw", "/tmp",
+            "--", "sh", "-c", "npm install --no-audit --no-fund"
         ])
         .output()
         .expect("Failed to execute npm install");
@@ -236,11 +259,9 @@ setTimeout(() => {
     // Test without protection
     let mut server_without_protection = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
-            "--protect-home=none",
-            "--ro", "/usr", "--ro", "/lib", "--ro", "/lib64", "--ro", "/bin", "--ro", "/sbin",
-            "--ro", "/etc", "--ro", "/proc", "--ro", "/sys", "--ro", "/dev", "--ro", "/run",
-            "--ro", "/var", "--ro", "/home/caleb/.local", "--rw", "/tmp",
+        .args([
+            "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
+            "--rw", "/tmp",
             "--", "sh", "-c", "node server.js"
         ])
         .spawn()
@@ -266,7 +287,7 @@ setTimeout(() => {
     // Test home access endpoint
     let curl_url = format!("http://localhost:{}/home", port);
     let curl_output = Command::new("curl")
-        .args(&["-s", &curl_url])
+        .args(["-s", &curl_url])
         .output();
 
     // Kill the server
@@ -278,13 +299,13 @@ setTimeout(() => {
         if response.contains("\"success\":true") {
             // Now test with protection - clean up port file first
             let _ = fs::remove_file(&port_file_path);
-            
+
             let mut server_with_protection = Command::new(common::get_playpen_path())
                 .current_dir(temp_dir.path())
-                .args(&[
+                .args([
                     "--current-dir-only",
-                    "--ro", "/home/caleb/.local", // Node installation via fnm
-                    "--ro", "/run/user/1000", // Runtime directory for fnm
+                    "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
+                    "--rw", "/tmp",
                     "--", "sh", "-c", "node server.js"
                 ])
                 .spawn()
@@ -309,7 +330,7 @@ setTimeout(() => {
             // Test home access endpoint with protection
             let protected_curl_url = format!("http://localhost:{}/home", protected_port);
             let protected_curl_output = Command::new("curl")
-                .args(&["-s", &protected_curl_url])
+                .args(["-s", &protected_curl_url])
                 .output();
 
             // Kill the server
@@ -318,11 +339,30 @@ setTimeout(() => {
 
             if let Ok(protected_output) = protected_curl_output {
                 let protected_response = String::from_utf8_lossy(&protected_output.stdout);
-                assert!(
-                    protected_response.contains("\"success\":false") || protected_response.is_empty(),
-                    "Expected home access to be blocked with protection, but got: {}",
-                    protected_response
-                );
+
+                // With ProtectHome=tmpfs, the home directory appears but is mostly empty
+                // The operation should either fail (success: false) or succeed with very few files
+                // (only those explicitly bound through --ro/--rw options)
+                if protected_response.contains("\"success\":true") {
+                    // Check if the files array is mostly empty - we expect very few files
+                    // with tmpfs protection (only bound mount directories like .local)
+                    let is_minimal = protected_response.contains("\"files\":[]") ||
+                                   protected_response.contains("\"files\":[") &&
+                                   protected_response.matches(',').count() <= 2; // At most 2-3 files
+
+                    assert!(
+                        is_minimal,
+                        "Expected minimal home directory contents with tmpfs protection, but got: {}",
+                        protected_response
+                    );
+                } else {
+                    // success: false is also acceptable (complete blocking)
+                    assert!(
+                        protected_response.contains("\"success\":false") || protected_response.is_empty(),
+                        "Expected home access to be blocked or minimal with protection, but got: {}",
+                        protected_response
+                    );
+                }
             }
         } else {
             eprintln!("Skipping protected test: unprotected server couldn't access home either");
@@ -360,13 +400,10 @@ fn test_npm_script_file_access() {
     // Run with current-dir-only protection
     let output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
+        .args([
             "--current-dir-only",
-            "--ro", "/home/caleb/.local", // Node installation via fnm
-            "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--ro", "/etc", // SSL/crypto configuration
-            "--ro", "/usr/lib", // System libraries
-            "--ro", "/var", // Variable data
+            // "--rw", npm_config_get("cache").unwrap().as_str(), // npm cache
+            // "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
             "--", "sh", "-c", "npm run test-files"
         ])
         .output()

@@ -176,19 +176,26 @@ accessible to the program with write access.:
 $ playpen --current-dir-only -m 100M -- npm install
 ```
 
-This completely blocks access to home directories while leaving system directories
-readable. The program can only access the current working directory (with read-write
-access) plus standard system resources needed for basic operation.
+This completely blocks access to home directories by mounting them as tmpfs (empty temporary
+filesystems) while leaving system directories readable. The program can only access the
+current working directory (with read-write access) plus standard system resources needed
+for basic operation.
 
 In practice, many tools will require additional access to function properly. For example,
-`npm install` typically needs access to the global npm cache in your home directory.
-You can grant this access with the `--rw` option:
+`npm install` typically needs access to the global npm cache in your home directory,
+as well as its own executable files. You can grant the necessary access with 
+the `--ro` ("read only") and `--rw` ("read write") options, which will override the
+tmpfs protection for those paths.
 
 ```bash
-$ playpen --current-dir-only --rw ~/.npm -m 2G -- npm install
+$ playpen \
+    --current-dir-only \
+    --rw $(npm config get cache) \
+    --ro $(npm config get prefix) \
+    -m 2G -- npm install
 ```
 
-Additional paths can be added as needed using the `--ro` and `--rw`.
+Further additional paths can be added as needed using more `--ro` and `--rw` options.
 
 ### Fine-Grained Path Control
 
