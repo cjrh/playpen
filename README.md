@@ -1,7 +1,7 @@
 ![playpen](playpen_transparent2.png)
 
 # playpen
-Program launcher with memory and cpu limits
+Program launcher with memory, cpu, and path limits
 
 ## Overview
 
