@@ -197,6 +197,19 @@ $ playpen \
 
 Further additional paths can be added as needed using more `--ro` and `--rw` options.
 
+I'm using the fnm node version manager. It does a few things differently with
+paths, so I have to add an additional read-only path for where fnm keeps
+the binaries:
+
+```bash
+$ playpen \
+    --current-dir-only \
+    --ro (npm config get prefix) \
+    --rw (npm config get cache) \
+    --ro /run/user \
+    -- npm ci
+```
+
 ### Fine-Grained Path Control
 
 You can override the default restrictions or create custom access patterns using:
