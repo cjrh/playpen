@@ -413,3 +413,13 @@ This only works on Linux and requires the `systemd` service manager.
 In particular, it uses the `systemd-run` command to launch the
 processes in a cgroup with the given limits. As such, `playpen`
 is a shallow wrapper around `systemd-run`.
+
+## Recipes
+
+### cargo build
+
+Use inside a Rust project. This allows access to `~/.cargo` (for caching and a shared build directory) and `~/.rustup` (for access to the rust toolchain), while the rest of the home directory is protected by the `--current-dir-only` preset. This is a good example of how to use the path access controls to allow access to specific directories while keeping the rest of the system protected.
+
+```
+playpen -m 32G --current-dir-only --rw $HOME/.cargo --ro $HOME/.rustup -- cargo build
+```
