@@ -43,7 +43,14 @@ fn test_go_profile_dry_run() {
 
 #[test]
 fn test_shell_profile_dry_run() {
+    // Create a fake home directory with the paths the shell profile expects
+    let temp_home = common::create_temp_dir();
+    std::fs::create_dir_all(temp_home.path().join(".local/share")).unwrap();
+    std::fs::create_dir_all(temp_home.path().join(".cache")).unwrap();
+    std::fs::create_dir_all(temp_home.path().join(".local/bin")).unwrap();
+
     let mut cmd = Command::new(common::get_playpen_path());
+    cmd.env("HOME", temp_home.path());
     cmd.args(["--profile", "shell", "--dry-run", "--", "bash"]);
 
     cmd.assert()
@@ -68,7 +75,13 @@ fn test_shell_profile_dry_run() {
 
 #[test]
 fn test_coding_agent_profile_dry_run() {
+    // Create a fake home directory with the paths the coding_agent profile expects
+    let temp_home = common::create_temp_dir();
+    std::fs::write(temp_home.path().join(".gitconfig"), "[user]\nname = test\n").unwrap();
+    std::fs::create_dir(temp_home.path().join(".ssh")).unwrap();
+
     let mut cmd = Command::new(common::get_playpen_path());
+    cmd.env("HOME", temp_home.path());
     cmd.args(["--profile", "coding_agent", "--dry-run", "--", "claude"]);
 
     cmd.assert()
