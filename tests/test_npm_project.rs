@@ -25,6 +25,10 @@ fn npm_config_get(field: &str) -> Option<String> {
 
 #[test]
 fn test_npm_project_without_protection() {
+    if !common::systemd_available() {
+        eprintln!("Skipping npm tests: systemd not available");
+        return;
+    }
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
         return;
@@ -77,6 +81,10 @@ fn test_npm_project_without_protection() {
 
 #[test]
 fn test_npm_project_with_current_dir_only() {
+    if !common::systemd_available() {
+        eprintln!("Skipping npm tests: systemd not available");
+        return;
+    }
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
         return;
@@ -133,6 +141,10 @@ fn test_npm_project_with_current_dir_only() {
 
 #[test]
 fn test_npm_install_with_protection() {
+    if !common::systemd_available() {
+        eprintln!("Skipping npm tests: systemd not available");
+        return;
+    }
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
         return;
@@ -203,6 +215,10 @@ fn test_npm_install_with_protection() {
 
 #[test]
 fn test_express_server_home_access() {
+    if !common::systemd_available() {
+        eprintln!("Skipping npm tests: systemd not available");
+        return;
+    }
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
         return;
@@ -424,6 +440,10 @@ setTimeout(() => {
 
 #[test]
 fn test_npm_script_file_access() {
+    if !common::systemd_available() {
+        eprintln!("Skipping npm tests: systemd not available");
+        return;
+    }
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
         return;

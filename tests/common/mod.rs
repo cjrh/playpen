@@ -53,3 +53,12 @@ pub fn node_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
+
+/// Check if a systemd user session is available (required for most integration tests)
+pub fn systemd_available() -> bool {
+    Command::new("systemd-run")
+        .args(["--user", "--wait", "--pipe", "--", "true"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}

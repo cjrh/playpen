@@ -2,8 +2,17 @@ use std::process::Command;
 
 mod common;
 
+fn skip_without_systemd() {
+    if !common::systemd_available() {
+        eprintln!("Skipping test: systemd user session not available");
+    }
+}
+
 #[test]
 fn test_no_protection_home_access() {
+    if !common::systemd_available() {
+        return;
+    }
     // Test that without protection, we can see home directory contents
     let output = Command::new(common::get_playpen_path())
         .args(&["--protect-home=none", "--", "sh", "-c", "ls /home | wc -l"])
@@ -25,6 +34,9 @@ fn test_no_protection_home_access() {
 
 #[test]
 fn test_protect_home_tmpfs() {
+    if !common::systemd_available() {
+        return;
+    }
     // Test that with tmpfs protection, home directory appears empty or minimal
     // Run from root directory to avoid conflicts with protection
     let output = Command::new(common::get_playpen_path())
@@ -54,6 +66,9 @@ fn test_protect_home_tmpfs() {
 
 #[test]
 fn test_current_dir_only_blocks_home() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
 
     // Create a test script that tries to read the home directory
@@ -91,6 +106,9 @@ except Exception as e:
 
 #[test]
 fn test_current_dir_only_allows_pwd() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
 
     // Create a test file in the current directory
@@ -118,6 +136,9 @@ fn test_current_dir_only_allows_pwd() {
 
 #[test]
 fn test_current_dir_only_blocks_sensitive_files() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
 
     // With ProtectHome=yes, user home directories should be blocked but /home might be listable
@@ -159,6 +180,9 @@ fn test_current_dir_only_blocks_sensitive_files() {
 
 #[test]
 fn test_fine_grained_ro_access() {
+    if !common::systemd_available() {
+        return;
+    }
     // Test read-only access to /etc from root directory to avoid conflicts
     let output = Command::new(common::get_playpen_path())
         .current_dir("/")
@@ -199,6 +223,9 @@ fn test_fine_grained_ro_access() {
 
 #[test]
 fn test_fine_grained_rw_access() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
     let test_file = temp_dir.path().join("test_write.txt");
 
@@ -233,6 +260,9 @@ fn test_fine_grained_rw_access() {
 
 #[test]
 fn test_inaccessible_paths() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
 
     // Test that inaccessible paths are blocked
@@ -251,6 +281,9 @@ fn test_inaccessible_paths() {
 
 #[test]
 fn test_memory_limit_still_works() {
+    if !common::systemd_available() {
+        return;
+    }
     let temp_dir = common::create_temp_dir();
 
     // Test that memory limits still work with new path features
