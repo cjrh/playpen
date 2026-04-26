@@ -18,19 +18,25 @@ Usage: playpen [OPTIONS] [COMMAND_AND_ARGS]...
 
 
 Arguments:
-  [COMMAND_AND_ARGS]...  
+  [COMMAND_AND_ARGS]...
 
 Options:
   -m, --memory-limit <MEMORY_LIMIT>
-          
+
   -c, --cpu-limit <CPU_LIMIT>
-          
+
   -q, --quiet
-          
+
       --capture-env <CAPTURE_ENV>
           [default: false] [possible values: true, false]
       --capture-path <CAPTURE_PATH>
           [default: true] [possible values: true, false]
+      --profile <NAME>
+          Use a predefined resource and filesystem profile
+      --memory-swap-max <VALUE>
+          Set MemorySwapMax limit (e.g., 0, 1G)
+      --dry-run
+          Print the resolved systemd-run command without executing
       --rw <RW_PATHS>
           Add read-write path access (can be repeated)
       --ro <RO_PATHS>
@@ -158,6 +164,112 @@ $ playpen -m 4G --capture-env=on -- npm run dev
 
 Occasionally this dev servers get memory leaks, making playpen more
 useful ;).
+
+## Profiles
+
+`playpen` includes predefined profiles that bundle resource limits and filesystem access for common tools. Profiles set sensible defaults for memory, CPU, and filesystem access so you don't have to figure out what paths each tool needs.
+
+### Available Profiles
+
+| Profile | Purpose | Memory | CPU | Swap |
+|---------|---------|--------|-----|------|
+| `cargo` | Rust/Cargo builds and tests | 2G | 300% | disabled |
+| `npm` | Node.js npm/yarn/pnpm build and test | 1G | 200% | disabled |
+| `pytest` | Python pytest | 512M | 200% | disabled |
+| `python` | General Python scripts | 512M | 100% | disabled |
+| `uv` | Python uv dependency management | 256M | 200% | disabled |
+| `go` | Go builds and tests | 512M | 300% | **enabled** |
+| `make` | C/C++ make/cmake builds | 2G | 300% | disabled |
+| `coding_agent` | AI coding agents (claude, codex, gemini, pi, etc.) | 4G | 200% | disabled |
+| `shell` | Interactive shell/terminal session | 4G | unlimited | disabled |
+
+### Basic Usage
+
+Use `--profile <name>` to activate a profile:
+
+```bash
+# Build a Rust project
+$ playpen --profile cargo -- cargo build
+
+# Run npm install
+$ playpen --profile npm -- npm install
+
+# Run Python tests
+$ playpen --profile pytest -- pytest
+
+# Start an interactive shell session
+$ playpen --profile shell -- bash
+```
+
+### Overriding Profile Settings
+
+All profile settings can be overridden by specifying flags after the profile. Arguments are processed left-to-right, and the **rightmost** occurrence of any setting wins:
+
+```bash
+# Override the memory limit
+$ playpen --profile cargo -m 4G -- cargo build
+
+# Override swap behavior
+$ playpen --profile cargo --memory-swap-max 1G -- cargo build
+
+# Add extra read-write path
+$ playpen --profile cargo --rw $HOME/.ccache -- cargo build
+```
+
+### AI Coding Agent Profile
+
+The `coding_agent` profile is designed for AI coding assistants. It hides the entire home directory by default (using `ProtectHome=tmpfs`) to prevent agents from reading secrets in dotfiles, then selectively exposes only what's needed for git operations:
+
+- `~/.gitconfig` (read-only) — git identity for commits
+- `~/.ssh` (read-only) — SSH keys for git push/pull
+- Current working directory (read-write) — your project code
+
+Agent-specific config directories are **not** included in the profile (for security — different agents shouldn't see each other's configs). You add only what your specific agent needs:
+
+```bash
+# Claude Code
+$ playpen --profile coding_agent --rw ~/.claude --ro ~/.claude.json -- claude
+
+# OpenAI Codex
+$ playpen --profile coding_agent --rw ~/.codex -- codex
+
+# Gemini CLI
+$ playpen --profile coding_agent --rw ~/.gemini -- gemini
+
+# pi
+$ playpen --profile coding_agent --rw ~/.pi -- pi
+```
+
+### Shell Profile
+
+The `shell` profile is designed for interactive terminal sessions. It makes the entire home directory **read-only** (so all your shell config is visible) but grants write access to commonly-used subdirectories:
+
+- `~/.local/share` — app data, shell history
+- `~/.cache` — build caches, download caches
+- `~/.local/bin` — user-installed tools
+- Current working directory — whatever you're working on
+
+No CPU limit is set because a terminal session may run arbitrary workloads.
+
+```bash
+$ playpen --profile shell -- bash
+```
+
+### Debugging with `--dry-run`
+
+Use `--dry-run` to see the resolved `systemd-run` command without executing it. This is useful for verifying what limits and paths a profile produces:
+
+```bash
+$ playpen --profile cargo --dry-run -- cargo build
+```
+
+### Symlinked Dotfiles
+
+With `ProtectHome=tmpfs`, home directories are replaced by an empty tmpfs. If a path like `~/.claude.json` is a symlink (e.g., `~/.claude.json -> stowfiles/.claude.json`), bind-mounting only the symlink will create a broken link because the target is also under the hidden `/home` tree. To fix this, also bind-mount the target directory:
+
+```bash
+$ playpen --profile coding_agent --ro ~/.claude.json --ro ~/stowfiles -- claude
+```
 
 ## Path Restrictions
 
@@ -418,8 +530,86 @@ is a shallow wrapper around `systemd-run`.
 
 ### cargo build
 
-Use inside a Rust project. This allows access to `~/.cargo` (for caching and a shared build directory) and `~/.rustup` (for access to the rust toolchain), while the rest of the home directory is protected by the `--current-dir-only` preset. This is a good example of how to use the path access controls to allow access to specific directories while keeping the rest of the system protected.
+Use the `cargo` profile inside a Rust project. This sets 2G memory, 300% CPU, and grants access to `~/.cargo` (for caching and a shared build directory) and `~/.rustup` (for access to the rust toolchain), while the rest of the home directory is hidden by `ProtectHome=tmpfs`.
 
 ```
-playpen -m 32G --current-dir-only --rw $HOME/.cargo --ro $HOME/.rustup -- cargo build
+playpen --profile cargo -- cargo build
 ```
+
+Override the memory limit for a large project:
+
+```
+playpen --profile cargo -m 32G -- cargo build
+```
+
+### npm install
+
+Use the `npm` profile for Node.js projects. It sets 1G memory, 200% CPU, and grants access to npm/yarn/pnpm caches.
+
+```
+playpen --profile npm -- npm install
+```
+
+### pytest
+
+Use the `pytest` profile for Python testing. It sets 512M memory, 200% CPU, and grants read-only access to user-installed Python packages.
+
+```
+playpen --profile pytest -- pytest
+```
+
+### Running an AI coding agent
+
+Use the `coding_agent` profile, then add the config directories for your specific agent. The profile hides the entire home directory by default, then selectively exposes git config and SSH keys needed for git operations.
+
+```
+# Claude Code
+playpen --profile coding_agent --rw ~/.claude --ro ~/.claude.json -- claude
+
+# OpenAI Codex
+playpen --profile coding_agent --rw ~/.codex -- codex
+
+# Gemini CLI
+playpen --profile coding_agent --rw ~/.gemini -- gemini
+
+# pi
+playpen --profile coding_agent --rw ~/.pi -- pi
+```
+
+### Interactive shell session
+
+Use the `shell` profile for an interactive terminal session. Home is read-only (all config visible), with write access granted to `~/.local/share`, `~/.cache`, and `~/.local/bin`.
+
+```
+playpen --profile shell -- bash
+```
+
+## Code Coverage
+
+This project uses [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) for LLVM source-based code coverage. It measures coverage from both unit tests and integration tests in a single combined report.
+
+### Prerequisites
+
+```bash
+cargo install cargo-llvm-cov
+```
+
+### Quick commands
+
+Two convenience aliases are defined in `.cargo/config.toml`:
+
+```bash
+# Generate lcov.info and print a terminal summary
+# (runs all tests under instrumentation, merges results)
+cargo coverage
+
+# Generate an HTML report and open it in your browser
+# (line-by-line highlighting in target/llvm-cov/html)
+cargo coverage-html
+```
+
+Both aliases instrument the entire workspace (`--all-features --workspace`), so all unit and integration test coverage is aggregated automatically.
+
+### CI
+
+A GitHub Actions workflow (`.github/workflows/coverage.yml`) generates `lcov.info` on every push/PR to `main` and uploads it as a build artifact.
