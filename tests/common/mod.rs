@@ -54,36 +54,4 @@ pub fn node_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a systemd user session is available and supports namespace
-/// properties like PrivateTmp, ProtectHome, etc. (required for most
-/// integration tests).
-pub fn systemd_available() -> bool {
-    // Basic check: can we run a simple command?
-    let basic = Command::new("systemd-run")
-        .args(["--user", "--wait", "--pipe", "--", "true"])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
 
-    if !basic {
-        return false;
-    }
-
-    // Thorough check: can we use namespace properties?
-    // Some CI environments have systemd-run but don't support namespaces,
-    // which causes exit code 218 (EXIT_NAMESPACE).
-    Command::new("systemd-run")
-        .args([
-            "--user",
-            "--wait",
-            "--pipe",
-            "-pPrivateTmp=yes",
-            "-pPrivateDevices=yes",
-            "-pProtectHome=tmpfs",
-            "--",
-            "true",
-        ])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
