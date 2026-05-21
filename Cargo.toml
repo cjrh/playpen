@@ -6,6 +6,10 @@ description = "Program launcher with memory, CPU, and path limits, built on syst
 license = "GPL-3.0-or-later"
 repository = "https://github.com/cjrh/playpen"
 readme = "README.md"
+# `playpen` is taken on crates.io by another crate; we distribute via GitHub
+# Releases only. Marking the package itself non-publishable makes cargo-release
+# skip all crates.io interaction (publish + registry lookups).
+publish = false
 
 # Lets `cargo binstall --git https://github.com/cjrh/playpen playpen` locate
 # the archives published by the release workflow. Tags are the bare version
