@@ -1,0 +1,48 @@
+name: Release
+
+# Runs when `cargo release` pushes a bare-version tag (e.g. 0.3.1). Builds a
+# binary for each supported Linux target and publishes them as assets on a
+# new GitHub release for the tag.
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+# `upload-rust-binary-action` creates the release and uploads assets, which
+# needs write access to repository contents.
+permissions:
+  contents: write
+
+jobs:
+  upload-assets:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Sets up linkers / runners so a plain `cargo build` cross-compiles the
+      # musl and aarch64 targets.
+      - uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+
+      # Builds in release mode, packages `playpen-<target>.tar.gz` (binary at
+      # the archive root) plus a .sha256 checksum, and uploads both to the
+      # release for this tag, creating the release if it does not yet exist.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: playpen
+          target: ${{ matrix.target }}
+          archive: $bin-$target
+          tar: unix
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}

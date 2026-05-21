@@ -1,0 +1,21 @@
+# cargo-release configuration. See https://github.com/crate-ci/cargo-release
+#
+# Usage (from a clean `main`):
+#   cargo release patch          # dry run — shows what would happen
+#   cargo release patch --execute  # bump, commit, tag, and push
+#
+# The pushed tag triggers .github/workflows/release.yml, which builds the
+# per-target archives and creates the GitHub release.
+
+# `playpen` is already taken on crates.io, so we distribute via GitHub
+# Releases only and never run `cargo publish`.
+publish = false
+
+# Commit the version bump, then tag and push commit + tag to origin.
+tag = true
+push = true
+
+# Bare-version tags (0.3.1, 0.4.0, ...), matching the existing tag history
+# and the `{ version }` placeholder in [package.metadata.binstall].
+tag-name = "{{version}}"
+pre-release-commit-message = "Release {{version}}"
