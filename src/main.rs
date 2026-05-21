@@ -19,6 +19,17 @@ struct Profile {
     cpu_quota: Option<&'static str>,
     memory_swap_max: Option<&'static str>,
     protect_home: &'static str,
+    /// Network isolation opinion. `Some(true)` = `PrivateNetwork=yes`,
+    /// `Some(false)` = `PrivateNetwork=no`, `None` = no opinion (the property
+    /// is not emitted, leaving network available — systemd's default).
+    ///
+    /// Every built-in profile deliberately sets this to `None`: build tools
+    /// (`cargo`, `npm`, `uv`, …) routinely fetch dependencies, so a profile
+    /// that silently disabled network would produce "works directly, fails in
+    /// playpen" surprises. Disabling network stays an explicit user choice via
+    /// `--private-network`. The field exists so a future PR can opt individual
+    /// profiles in once usage shows which are genuinely network-free.
+    private_network: Option<bool>,
     rw_paths: &'static [&'static str],
     ro_paths: &'static [&'static str],
 }
@@ -33,6 +44,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &["$HOME/.cargo"],
         ro_paths: &["$HOME/.rustup"],
     },
@@ -43,6 +55,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &["$HOME/.npm", "$HOME/.cache/yarn", "$HOME/.local/share/pnpm"],
         ro_paths: &["$HOME/.local/share/fnm", "/run/user/$UID"],
     },
@@ -53,6 +66,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &[],
         ro_paths: &["$HOME/.local/lib"],
     },
@@ -63,6 +77,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("100%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &[],
         ro_paths: &["$HOME/.local/lib"],
     },
@@ -73,6 +88,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &["$HOME/.cache/uv", "$HOME/.local/share/uv"],
         ro_paths: &[],
     },
@@ -83,6 +99,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: None,
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &["$HOME/go", "$HOME/.cache/go-build"],
         ro_paths: &[],
     },
@@ -93,6 +110,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &[],
         ro_paths: &[],
     },
@@ -103,6 +121,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        private_network: None,
         rw_paths: &[],
         ro_paths: &["$HOME/.gitconfig", "$HOME/.ssh"],
     },
@@ -113,6 +132,7 @@ const PROFILES: &[Profile] = &[
         cpu_quota: None,
         memory_swap_max: Some("0"),
         protect_home: "read-only",
+        private_network: None,
         rw_paths: &["$HOME/.local/share", "$HOME/.cache", "$HOME/.local/bin"],
         ro_paths: &[],
     },
@@ -216,6 +236,38 @@ struct Run {
     #[arg(long, help = "Protect system directories: none/yes/full/strict")]
     protect_system: Option<String>,
 
+    // Network controls.
+    #[arg(
+        long,
+        value_parser = BoolishValueParser::new(),
+        help = "Use a private network namespace, no external network (default: off)"
+    )]
+    private_network: Option<bool>,
+
+    #[arg(
+        long = "ip-allow",
+        help = "Allow IP/CIDR for network traffic (can be repeated)"
+    )]
+    ip_allow: Vec<String>,
+
+    #[arg(
+        long = "ip-deny",
+        help = "Deny IP/CIDR for network traffic (can be repeated)"
+    )]
+    ip_deny: Vec<String>,
+
+    #[arg(
+        long = "socket-bind-allow",
+        help = "Allow bind() rule for listening sockets (can be repeated)"
+    )]
+    socket_bind_allow: Vec<String>,
+
+    #[arg(
+        long = "socket-bind-deny",
+        help = "Deny bind() rule for listening sockets (can be repeated)"
+    )]
+    socket_bind_deny: Vec<String>,
+
     #[arg(long, help = "Restrictive preset: only current directory accessible")]
     current_dir_only: bool,
 
@@ -246,6 +298,15 @@ struct Config {
     /// Bind-mount the current directory read-write. Needed whenever the home
     /// directory is hidden, so the project being worked on stays reachable.
     bind_cwd: bool,
+    /// Network namespace isolation. `Some(true)` emits `PrivateNetwork=yes`,
+    /// `Some(false)` emits `PrivateNetwork=no`, `None` emits nothing.
+    private_network: Option<bool>,
+    /// `IPAddressAllow=` / `IPAddressDeny=` entries, in CLI order.
+    ip_allow: Vec<String>,
+    ip_deny: Vec<String>,
+    /// `SocketBindAllow=` / `SocketBindDeny=` rules, in CLI order.
+    socket_bind_allow: Vec<String>,
+    socket_bind_deny: Vec<String>,
 }
 
 impl Config {
@@ -271,6 +332,11 @@ impl Config {
             bind_ro_paths: Vec::new(),
             inaccessible_paths: Vec::new(),
             bind_cwd: false,
+            private_network: None,
+            ip_allow: Vec::new(),
+            ip_deny: Vec::new(),
+            socket_bind_allow: Vec::new(),
+            socket_bind_deny: Vec::new(),
         };
 
         // Profile baseline.
@@ -280,6 +346,7 @@ impl Config {
             c.cpu_quota = p.cpu_quota.map(String::from);
             c.memory_swap_max = p.memory_swap_max.map(String::from);
             c.protect_home = Some(p.protect_home.to_string());
+            c.private_network = p.private_network;
             c.bind_cwd = true;
             for path in p.rw_paths {
                 push_if_exists(&mut c.bind_paths, path);
@@ -289,7 +356,11 @@ impl Config {
             }
         }
 
-        // The --current-dir-only preset: hide home, keep only the cwd.
+        // The --current-dir-only preset: hide home, keep only the cwd. This is
+        // deliberately a *filesystem*-only preset — it does not touch network
+        // settings, so a user who picks it for filesystem reasons is not
+        // surprised by network failures. Compose with --private-network for
+        // both.
         if cli.current_dir_only {
             c.protect_home = Some("tmpfs".to_string());
             c.bind_cwd = true;
@@ -323,12 +394,21 @@ impl Config {
         if let Some(v) = cli.protect_control_groups {
             c.protect_control_groups = v;
         }
+        if let Some(v) = cli.private_network {
+            c.private_network = Some(v);
+        }
 
         // Path flags accumulate on top of any profile paths.
         c.bind_paths.extend(cli.rw_paths.iter().cloned());
         c.bind_ro_paths.extend(cli.ro_paths.iter().cloned());
         c.inaccessible_paths
             .extend(cli.inaccessible.iter().cloned());
+        c.ip_allow.extend(cli.ip_allow.iter().cloned());
+        c.ip_deny.extend(cli.ip_deny.iter().cloned());
+        c.socket_bind_allow
+            .extend(cli.socket_bind_allow.iter().cloned());
+        c.socket_bind_deny
+            .extend(cli.socket_bind_deny.iter().cloned());
 
         // A bare memory limit gets a hard ceiling by disabling swap. Profiles
         // pick their own swap policy, so this default applies only when no
@@ -371,6 +451,25 @@ impl Config {
         }
         if let Some(v) = &self.protect_system {
             args.push(format!("-pProtectSystem={}", v));
+        }
+
+        if let Some(v) = self.private_network {
+            args.push(format!(
+                "-pPrivateNetwork={}",
+                if v { "yes" } else { "no" }
+            ));
+        }
+        for v in &self.ip_allow {
+            args.push(format!("-pIPAddressAllow={}", v));
+        }
+        for v in &self.ip_deny {
+            args.push(format!("-pIPAddressDeny={}", v));
+        }
+        for v in &self.socket_bind_allow {
+            args.push(format!("-pSocketBindAllow={}", v));
+        }
+        for v in &self.socket_bind_deny {
+            args.push(format!("-pSocketBindDeny={}", v));
         }
 
         if self.bind_cwd {

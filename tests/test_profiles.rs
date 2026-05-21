@@ -18,7 +18,9 @@ fn test_cargo_profile_dry_run() {
         .stdout(
             predicate::str::contains("-pBindReadOnlyPaths=")
                 .and(predicate::str::contains("/.rustup")),
-        );
+        )
+        // v1: no profile changes network behavior.
+        .stdout(predicate::str::contains("PrivateNetwork").not());
 }
 
 #[test]
