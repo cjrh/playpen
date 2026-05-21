@@ -1,6 +1,9 @@
 ![playpen](playpen_transparent2.png)
 
 # playpen
+
+[![Coverage Status](https://coveralls.io/repos/github/cjrh/playpen/badge.svg?branch=main)](https://coveralls.io/github/cjrh/playpen?branch=main)
+
 Program launcher with memory, cpu, and path limits
 
 ## Overview
