@@ -75,6 +75,8 @@ fn test_shell_profile_dry_run() {
     assert!(stdout.contains("/.local/bin"));
 }
 
+// Function name uses `_` where the profile name `coding-agent` uses `-`:
+// Rust identifiers cannot contain hyphens.
 #[test]
 fn test_coding_agent_profile_dry_run() {
     // Create a fake home directory with the paths the coding-agent profile expects

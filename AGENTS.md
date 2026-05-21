@@ -34,7 +34,7 @@ cargo coverage-html     # opens HTML report in browser
 
 ## Architecture
 
-- **Single binary**: All code is in `src/main.rs` (~400 lines)
+- **Single binary**: All code is in `src/main.rs`
 - **CLI parsing**: Uses `clap` with derive macros
 - **Core functionality**: Builds and executes `systemd-run` commands with appropriate flags, then replaces the current process via `execvp`
 
@@ -94,7 +94,7 @@ Profiles bundle resource limits and filesystem access for common tools. There ar
 
 Profile paths containing `$HOME` and `$UID` are expanded at runtime via `shellexpand`. Non-existent paths are silently skipped (not added as bind mounts).
 
-Activating a profile sets `Config.protect_home` and `bind_cwd = true` (so the working directory stays reachable once home is hidden). The four namespace protections are on by default for every run — a profile does not need to touch them.
+Activating a profile copies three fields into `Config`: `protect_home`, `private_network`, and `bind_cwd` (forced to `true` so the working directory stays reachable once home is hidden). Adding a new profile-level opinion means adding a field to both `struct Profile` and `struct Config` and copying it here, in `Config::resolve`. The four namespace protections are on by default for every run — a profile does not need to touch them.
 
 ### Resource Limits
 
@@ -111,9 +111,12 @@ All tests are integration tests in the `tests/` directory:
 - **`tests/test_home_access.rs`** — 9 tests for path restriction behavior (`--protect-home`, `--current-dir-only`, `--rw`, `--ro`, `--inaccessible`)
 - **`tests/test_npm_project.rs`** — 5 tests for npm-specific sandboxing (requires npm/node on the system; skips if unavailable)
 - **`tests/test_profiles.rs`** — 13 tests for profile dry-run output, override precedence (explicit flags beat the profile, order-independent), unknown profile errors, and path accumulation
+- **`tests/test_network.rs`** — 23 tests for network-control flags (`--private-network`, `--ip-allow`/`--ip-deny`, `--socket-bind-allow`/`--socket-bind-deny`); all use `--dry-run` and run everywhere
 
 Tests that invoke `systemd-run` for real (`test_home_access.rs`, `test_npm_project.rs`) are marked `#[ignore]` because GitHub-hosted CI runners cannot set up the mount namespaces they need (systemd exit code 218). Run them locally with `cargo test -- --include-ignored`. The `test_profiles.rs` tests use `--dry-run` and run everywhere.
-- **`tests/common/mod.rs`** — Shared test utilities and binary path resolution
+- **`tests/common/mod.rs`** — Shared test utilities and binary path resolution. Carries `#![allow(dead_code)]`: it is compiled into every test binary, so a helper used by only one of them looks dead to the others.
+
+CLI profile names use hyphens (e.g. `coding-agent`); the matching Rust test function names substitute underscores (`test_coding_agent_profile_dry_run`) because Rust identifiers cannot contain hyphens. This mismatch is expected, not a bug — keep it in mind when renaming a profile.
 
 ### Code Coverage
 
@@ -138,10 +141,14 @@ Unit and integration test coverage is automatically merged. The CI workflow at `
 
 ## Project Organization
 
-- **`src/main.rs`** — Single binary source (~400 lines)
-- **`tests/`** — Integration tests (`test_home_access.rs`, `test_npm_project.rs`, `test_profiles.rs`)
+- **`src/main.rs`** — Single binary source
+- **`tests/`** — Integration tests (`test_home_access.rs`, `test_npm_project.rs`, `test_profiles.rs`, `test_network.rs`)
 - **`.cargo/config.toml`** — Cargo aliases (`coverage`, `coverage-html`)
-- **`plans/`** — Design documents and implementation plans for previously shipped releases (e.g., `PROFILES_PLAN.md`)
+- **`plans/`** — Design documents and implementation plans (e.g., `PROFILES_PLAN.md`)
+
+The `## CLI Docs` block in `README.md` is a hand-maintained snapshot of `playpen -h`. Whenever a CLI flag is added, removed, or reworded, regenerate it with `cargo run --quiet -- -h`.
+
+When a commit removes or renames a key type or function named in this file, update this file in the same commit.
 
 ## Platform Constraints
 

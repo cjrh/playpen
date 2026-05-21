@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Treat warnings (unused code, dead helpers, etc.) as hard errors so they
+  # surface in CI instead of accumulating unnoticed.
+  RUSTFLAGS: "-D warnings"
 
 jobs:
   coverage:
