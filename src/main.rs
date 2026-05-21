@@ -181,6 +181,33 @@ struct Run {
     #[clap(short, long)]
     cpu_limit: Option<String>,
 
+    // Disk I/O bandwidth limits. `--disk-limit` caps the read and write
+    // rates together; `--disk-read`/`--disk-write` cap a single direction and
+    // override `--disk-limit` for that direction. Values are byte/sec rates
+    // for the block device backing the working directory, using systemd's
+    // K/M/G/T suffixes (e.g. 50M, 500K).
+    #[clap(
+        short,
+        long,
+        value_name = "VALUE",
+        help = "Limit disk I/O bandwidth, read and write, for the working directory's device (e.g. 50M, 500K)"
+    )]
+    disk_limit: Option<String>,
+
+    #[clap(
+        long,
+        value_name = "VALUE",
+        help = "Limit disk read bandwidth only; overrides --disk-limit for reads"
+    )]
+    disk_read: Option<String>,
+
+    #[clap(
+        long,
+        value_name = "VALUE",
+        help = "Limit disk write bandwidth only; overrides --disk-limit for writes"
+    )]
+    disk_write: Option<String>,
+
     #[clap(short, long, default_value = "false")]
     quiet: bool,
 
@@ -284,6 +311,11 @@ struct Config {
     memory_max: Option<String>,
     memory_swap_max: Option<String>,
     cpu_quota: Option<String>,
+    /// Per-direction disk I/O bandwidth ceilings (bytes/sec) for the block
+    /// device backing the working directory. `None` leaves that direction
+    /// unlimited.
+    io_read_bandwidth_max: Option<String>,
+    io_write_bandwidth_max: Option<String>,
     /// systemd `ProtectHome` value (`yes`/`read-only`/`tmpfs`); `None` leaves
     /// the home directory unrestricted.
     protect_home: Option<String>,
@@ -322,6 +354,8 @@ impl Config {
             memory_max: None,
             memory_swap_max: None,
             cpu_quota: None,
+            io_read_bandwidth_max: None,
+            io_write_bandwidth_max: None,
             protect_home: None,
             protect_system: None,
             private_tmp: true,
@@ -372,6 +406,18 @@ impl Config {
         }
         if let Some(v) = &cli.cpu_limit {
             c.cpu_quota = Some(v.clone());
+        }
+        // Disk I/O: --disk-limit seeds both directions; a direction-specific
+        // flag then overrides its own side.
+        if let Some(v) = &cli.disk_limit {
+            c.io_read_bandwidth_max = Some(v.clone());
+            c.io_write_bandwidth_max = Some(v.clone());
+        }
+        if let Some(v) = &cli.disk_read {
+            c.io_read_bandwidth_max = Some(v.clone());
+        }
+        if let Some(v) = &cli.disk_write {
+            c.io_write_bandwidth_max = Some(v.clone());
         }
         if let Some(v) = &cli.memory_swap_max {
             c.memory_swap_max = Some(v.clone());
@@ -433,6 +479,19 @@ impl Config {
         if let Some(v) = &self.cpu_quota {
             args.push(format!("-pCPUQuota={}", v));
             args.push(format!("-pCPUQuotaPeriodSec={}", DEFAULT_CPU_QUOTA_PERIOD));
+        }
+        // Disk I/O limits name the block device backing the working
+        // directory — where a sandboxed build does its real I/O. systemd
+        // resolves the path to its device, so passing the path is enough.
+        if self.io_read_bandwidth_max.is_some() || self.io_write_bandwidth_max.is_some() {
+            if let Ok(pwd) = std::env::current_dir() {
+                if let Some(v) = &self.io_read_bandwidth_max {
+                    args.push(format!("-pIOReadBandwidthMax={} {}", pwd.display(), v));
+                }
+                if let Some(v) = &self.io_write_bandwidth_max {
+                    args.push(format!("-pIOWriteBandwidthMax={} {}", pwd.display(), v));
+                }
+            }
         }
         if self.private_tmp {
             args.push("-pPrivateTmp=yes".to_string());
