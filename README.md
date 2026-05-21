@@ -13,6 +13,29 @@ that `systemd-run` does exactly this, _and it doesn't require root_, but
 the necessary parameters are many and confusing. So playpen wraps all that
 up in a simple CLI which is set up for the typical use cases I have.
 
+## Installation
+
+`playpen` runs on Linux with `systemd` (it shells out to `systemd-run`).
+
+### Prebuilt binary
+
+Each [release](https://github.com/cjrh/playpen/releases) ships archives for
+`x86_64` and `aarch64`, in both glibc and static `musl` builds. Install with
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```bash
+cargo binstall --git https://github.com/cjrh/playpen playpen
+```
+
+Or download the archive for your target from the releases page and put the
+`playpen` binary on your `PATH`.
+
+### From source
+
+```bash
+cargo install --git https://github.com/cjrh/playpen
+```
+
 ## CLI Docs
 
 ```
