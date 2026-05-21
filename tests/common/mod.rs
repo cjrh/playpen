@@ -5,6 +5,12 @@ use tempfile::TempDir;
 
 /// Get the path to the playpen binary
 pub fn get_playpen_path() -> PathBuf {
+    // Cargo sets this env var for integration tests
+    if let Ok(path) = env::var("CARGO_BIN_EXE_playpen") {
+        return PathBuf::from(path);
+    }
+
+    // Fallback: compute from current_exe location
     let mut path = env::current_exe()
         .expect("Failed to get current executable path")
         .parent()

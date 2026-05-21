@@ -1,7 +1,7 @@
-use std::process::Command;
 use std::fs;
-use std::time::Duration;
+use std::process::Command;
 use std::thread;
+use std::time::Duration;
 
 mod common;
 
@@ -24,6 +24,7 @@ fn npm_config_get(field: &str) -> Option<String> {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_project_without_protection() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -49,10 +50,16 @@ fn test_npm_project_without_protection() {
         .current_dir(temp_dir.path())
         .args(&[
             "--protect-home=none",
-            "--ro", "/run",
-            "--ro", "/home/caleb/.local",
-            "--rw", temp_dir.path().to_str().unwrap(), // Allow access to temp directory
-            "--", "sh", "-c", "npm run test-home"
+            "--ro",
+            "/run",
+            "--ro",
+            "/home/caleb/.local",
+            "--rw",
+            temp_dir.path().to_str().unwrap(), // Allow access to temp directory
+            "--",
+            "sh",
+            "-c",
+            "npm run test-home",
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -64,11 +71,13 @@ fn test_npm_project_without_protection() {
     assert!(
         stdout.contains("HOME_ACCESS_SUCCESS") || stderr.contains("HOME_ACCESS_SUCCESS"),
         "Expected to access home directory without protection. stdout: {}, stderr: {}",
-        stdout, stderr
+        stdout,
+        stderr
     );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_project_with_current_dir_only() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -95,12 +104,20 @@ fn test_npm_project_with_current_dir_only() {
         .current_dir(temp_dir.path())
         .args(&[
             "--current-dir-only",
-            "--ro", "/home/caleb/.local", // Node installation via fnm
-            "--ro", "/run/user/1000", // Runtime directory for fnm
-            "--ro", "/etc", // SSL/crypto configuration
-            "--ro", "/usr/lib", // System libraries
-            "--ro", "/var", // Variable data
-            "--", "sh", "-c", "npm run test-home"
+            "--ro",
+            "/home/caleb/.local", // Node installation via fnm
+            "--ro",
+            "/run/user/1000", // Runtime directory for fnm
+            "--ro",
+            "/etc", // SSL/crypto configuration
+            "--ro",
+            "/usr/lib", // System libraries
+            "--ro",
+            "/var", // Variable data
+            "--",
+            "sh",
+            "-c",
+            "npm run test-home",
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -117,6 +134,7 @@ fn test_npm_project_with_current_dir_only() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_install_with_protection() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -146,9 +164,14 @@ fn test_npm_install_with_protection() {
         .current_dir(temp_dir.path())
         .args([
             "--current-dir-only",
-            "--rw", npm_cache.as_str(), // npm cache
-            "--ro", npm_prefix.as_str(), // npm global packages
-            "--", "sh", "-c", "npm install --no-audit --no-fund"
+            "--rw",
+            npm_cache.as_str(), // npm cache
+            "--ro",
+            npm_prefix.as_str(), // npm global packages
+            "--",
+            "sh",
+            "-c",
+            "npm install --no-audit --no-fund",
         ])
         .output()
         .expect("Failed to execute playpen");
@@ -160,19 +183,29 @@ fn test_npm_install_with_protection() {
 
         // Check if this is a network/DNS issue (still possible)
         let error_output = format!("{}{}", stdout, stderr);
-        if error_output.contains("getaddrinfo") || error_output.contains("network") ||
-           error_output.contains("ENOTFOUND") || error_output.contains("timeout") {
+        if error_output.contains("getaddrinfo")
+            || error_output.contains("network")
+            || error_output.contains("ENOTFOUND")
+            || error_output.contains("timeout")
+        {
             eprintln!("npm install failed due to network issues, skipping test");
             return;
         }
-        panic!("npm install failed with protection. stdout: {}, stderr: {}", stdout, stderr);
+        panic!(
+            "npm install failed with protection. stdout: {}, stderr: {}",
+            stdout, stderr
+        );
     }
 
     // Verify node_modules was created
-    assert!(temp_dir.path().join("node_modules").exists(), "node_modules directory should be created");
+    assert!(
+        temp_dir.path().join("node_modules").exists(),
+        "node_modules directory should be created"
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_express_server_home_access() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -226,18 +259,23 @@ setTimeout(() => {
 }, 30000);
 "#;
 
-    fs::write(temp_dir.path().join("server.js"), server_js)
-        .expect("Failed to create server.js");
+    fs::write(temp_dir.path().join("server.js"), server_js).expect("Failed to create server.js");
 
     // First install dependencies
     let install_output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
         .args([
             "--current-dir-only",
-            "--rw", npm_config_get("cache").unwrap().as_str(), // npm cache
-            "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
-            "--rw", "/tmp",
-            "--", "sh", "-c", "npm install --no-audit --no-fund"
+            "--rw",
+            npm_config_get("cache").unwrap().as_str(), // npm cache
+            "--ro",
+            npm_config_get("prefix").unwrap().as_str(), // npm global packages
+            "--rw",
+            "/tmp",
+            "--",
+            "sh",
+            "-c",
+            "npm install --no-audit --no-fund",
         ])
         .output()
         .expect("Failed to execute npm install");
@@ -248,21 +286,32 @@ setTimeout(() => {
 
         // Check if this is a network/DNS issue (still possible)
         let error_output = format!("{}{}", stdout, stderr);
-        if error_output.contains("getaddrinfo") || error_output.contains("network") ||
-           error_output.contains("ENOTFOUND") || error_output.contains("timeout") {
+        if error_output.contains("getaddrinfo")
+            || error_output.contains("network")
+            || error_output.contains("ENOTFOUND")
+            || error_output.contains("timeout")
+        {
             eprintln!("Skipping express test: npm install failed due to network issues");
             return;
         }
-        panic!("npm install failed in express test. stdout: {}, stderr: {}", stdout, stderr);
+        panic!(
+            "npm install failed in express test. stdout: {}, stderr: {}",
+            stdout, stderr
+        );
     }
 
     // Test without protection
     let mut server_without_protection = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
         .args([
-            "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
-            "--rw", "/tmp",
-            "--", "sh", "-c", "node server.js"
+            "--ro",
+            npm_config_get("prefix").unwrap().as_str(), // npm global packages
+            "--rw",
+            "/tmp",
+            "--",
+            "sh",
+            "-c",
+            "node server.js",
         ])
         .spawn()
         .expect("Failed to start server without protection");
@@ -286,9 +335,7 @@ setTimeout(() => {
 
     // Test home access endpoint
     let curl_url = format!("http://localhost:{}/home", port);
-    let curl_output = Command::new("curl")
-        .args(["-s", &curl_url])
-        .output();
+    let curl_output = Command::new("curl").args(["-s", &curl_url]).output();
 
     // Kill the server
     let _ = server_without_protection.kill();
@@ -304,9 +351,14 @@ setTimeout(() => {
                 .current_dir(temp_dir.path())
                 .args([
                     "--current-dir-only",
-                    "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
-                    "--rw", "/tmp",
-                    "--", "sh", "-c", "node server.js"
+                    "--ro",
+                    npm_config_get("prefix").unwrap().as_str(), // npm global packages
+                    "--rw",
+                    "/tmp",
+                    "--",
+                    "sh",
+                    "-c",
+                    "node server.js",
                 ])
                 .spawn()
                 .expect("Failed to start server with protection");
@@ -321,7 +373,9 @@ setTimeout(() => {
                     .trim()
                     .to_string()
             } else {
-                eprintln!("Protected server port file not found, server may not have started properly");
+                eprintln!(
+                    "Protected server port file not found, server may not have started properly"
+                );
                 let _ = server_with_protection.kill();
                 let _ = server_with_protection.wait();
                 return;
@@ -346,9 +400,9 @@ setTimeout(() => {
                 if protected_response.contains("\"success\":true") {
                     // Check if the files array is mostly empty - we expect very few files
                     // with tmpfs protection (only bound mount directories like .local)
-                    let is_minimal = protected_response.contains("\"files\":[]") ||
-                                   protected_response.contains("\"files\":[") &&
-                                   protected_response.matches(',').count() <= 2; // At most 2-3 files
+                    let is_minimal = protected_response.contains("\"files\":[]")
+                        || protected_response.contains("\"files\":[")
+                            && protected_response.matches(',').count() <= 2; // At most 2-3 files
 
                     assert!(
                         is_minimal,
@@ -373,6 +427,7 @@ setTimeout(() => {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_script_file_access() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -404,7 +459,10 @@ fn test_npm_script_file_access() {
             "--current-dir-only",
             // "--rw", npm_config_get("cache").unwrap().as_str(), // npm cache
             // "--ro", npm_config_get("prefix").unwrap().as_str(), // npm global packages
-            "--", "sh", "-c", "npm run test-files"
+            "--",
+            "sh",
+            "-c",
+            "npm run test-files",
         ])
         .output()
         .expect("Failed to execute playpen");

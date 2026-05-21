@@ -3,6 +3,7 @@ use std::process::Command;
 mod common;
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_no_protection_home_access() {
     // Test that without protection, we can see home directory contents
     let output = Command::new(common::get_playpen_path())
@@ -11,12 +12,20 @@ fn test_no_protection_home_access() {
         .expect("Failed to execute playpen");
 
     assert!(output.status.success());
-    let line_count = String::from_utf8_lossy(&output.stdout).trim().parse::<i32>().unwrap_or(0);
+    let line_count = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<i32>()
+        .unwrap_or(0);
     // Should see at least one entry (the user's home directory)
-    assert!(line_count >= 1, "Expected to see home directory contents, got: {}", line_count);
+    assert!(
+        line_count >= 1,
+        "Expected to see home directory contents, got: {}",
+        line_count
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_protect_home_tmpfs() {
     // Test that with tmpfs protection, home directory appears empty or minimal
     // Run from root directory to avoid conflicts with protection
@@ -37,10 +46,16 @@ fn test_protect_home_tmpfs() {
 
     // With tmpfs, /home should be empty or contain only what we bind-mount
     // This depends on implementation, but should be less than a normal home directory
-    assert!(line_count <= 1, "Expected minimal home directory contents with tmpfs, got {} lines: {}", line_count, stdout);
+    assert!(
+        line_count <= 1,
+        "Expected minimal home directory contents with tmpfs, got {} lines: {}",
+        line_count,
+        stdout
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_blocks_home() {
     let temp_dir = common::create_temp_dir();
 
@@ -65,18 +80,20 @@ except Exception as e:
 
     let output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
-            "--current-dir-only",
-            "--", "python3", "test_home.py"
-        ])
+        .args(&["--current-dir-only", "--", "python3", "test_home.py"])
         .output()
         .expect("Failed to execute playpen");
 
     // The script should fail because home access is blocked by InaccessiblePaths=/
-    assert!(!output.status.success(), "Expected home access to be blocked, but script succeeded. Output: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        !output.status.success(),
+        "Expected home access to be blocked, but script succeeded. Output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_allows_pwd() {
     let temp_dir = common::create_temp_dir();
 
@@ -86,10 +103,7 @@ fn test_current_dir_only_allows_pwd() {
 
     let output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
-        .args(&[
-            "--current-dir-only",
-            "--", "cat", "test_file.txt"
-        ])
+        .args(&["--current-dir-only", "--", "cat", "test_file.txt"])
         .output()
         .expect("Failed to execute playpen");
 
@@ -99,10 +113,15 @@ fn test_current_dir_only_allows_pwd() {
         panic!("Command failed. stdout: {}, stderr: {}", stdout, stderr);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Hello World"), "Expected to read file from current directory, got: {}", stdout);
+    assert!(
+        stdout.contains("Hello World"),
+        "Expected to read file from current directory, got: {}",
+        stdout
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_blocks_sensitive_files() {
     let temp_dir = common::create_temp_dir();
 
@@ -120,7 +139,10 @@ fn test_current_dir_only_blocks_sensitive_files() {
             .current_dir(temp_dir.path())
             .args(&[
                 "--current-dir-only",
-                "--", "sh", "-c", &format!("test -e {} && echo 'ACCESSIBLE' || echo 'BLOCKED'", path)
+                "--",
+                "sh",
+                "-c",
+                &format!("test -e {} && echo 'ACCESSIBLE' || echo 'BLOCKED'", path),
             ])
             .output()
             .expect("Failed to execute playpen");
@@ -131,11 +153,17 @@ fn test_current_dir_only_blocks_sensitive_files() {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("BLOCKED"), "Expected {} to be blocked, but it was accessible. Output: {}", path, stdout);
+        assert!(
+            stdout.contains("BLOCKED"),
+            "Expected {} to be blocked, but it was accessible. Output: {}",
+            path,
+            stdout
+        );
     }
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_fine_grained_ro_access() {
     // Test read-only access to /etc from root directory to avoid conflicts
     let output = Command::new(common::get_playpen_path())
@@ -147,39 +175,71 @@ fn test_fine_grained_ro_access() {
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("Expected to read /etc/passwd with read-only access. stdout: {}, stderr: {}", stdout, stderr);
+        panic!(
+            "Expected to read /etc/passwd with read-only access. stdout: {}, stderr: {}",
+            stdout, stderr
+        );
     }
 
     // Test that we can't write to the read-only path
     let output = Command::new(common::get_playpen_path())
         .current_dir("/")
-        .args(&["--ro", "/etc", "--", "sh", "-c", "echo 'test' > /etc/test_file 2>&1 || echo 'WRITE_BLOCKED'"])
+        .args(&[
+            "--ro",
+            "/etc",
+            "--",
+            "sh",
+            "-c",
+            "echo 'test' > /etc/test_file 2>&1 || echo 'WRITE_BLOCKED'",
+        ])
         .output()
         .expect("Failed to execute playpen");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("WRITE_BLOCKED") || !output.status.success(),
-           "Expected write to be blocked to read-only path, but got: {}", stdout);
+    assert!(
+        stdout.contains("WRITE_BLOCKED") || !output.status.success(),
+        "Expected write to be blocked to read-only path, but got: {}",
+        stdout
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_fine_grained_rw_access() {
     let temp_dir = common::create_temp_dir();
     let test_file = temp_dir.path().join("test_write.txt");
 
     // Test read-write access to temp directory
     let output = Command::new(common::get_playpen_path())
-        .args(&["--rw", temp_dir.path().to_str().unwrap(), "--", "sh", "-c",
-                &format!("echo 'test content' > {} && cat {}", test_file.display(), test_file.display())])
+        .args(&[
+            "--rw",
+            temp_dir.path().to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            &format!(
+                "echo 'test content' > {} && cat {}",
+                test_file.display(),
+                test_file.display()
+            ),
+        ])
         .output()
         .expect("Failed to execute playpen");
 
-    assert!(output.status.success(), "Expected read-write access to work");
+    assert!(
+        output.status.success(),
+        "Expected read-write access to work"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("test content"), "Expected to write and read file, got: {}", stdout);
+    assert!(
+        stdout.contains("test content"),
+        "Expected to write and read file, got: {}",
+        stdout
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_inaccessible_paths() {
     let temp_dir = common::create_temp_dir();
 
@@ -191,10 +251,14 @@ fn test_inaccessible_paths() {
         .expect("Failed to execute playpen");
 
     // Should fail to access /etc
-    assert!(!output.status.success(), "Expected /etc to be inaccessible, but command succeeded");
+    assert!(
+        !output.status.success(),
+        "Expected /etc to be inaccessible, but command succeeded"
+    );
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_memory_limit_still_works() {
     let temp_dir = common::create_temp_dir();
 
@@ -202,13 +266,20 @@ fn test_memory_limit_still_works() {
     let output = Command::new(common::get_playpen_path())
         .current_dir(temp_dir.path())
         .args(&[
-            "-m", "50M", "--current-dir-only",
-            "--", "echo", "Memory limits work"
+            "-m",
+            "50M",
+            "--current-dir-only",
+            "--",
+            "echo",
+            "Memory limits work",
         ])
         .output()
         .expect("Failed to execute playpen");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Memory limits work"), "Expected memory limits to work with path restrictions");
+    assert!(
+        stdout.contains("Memory limits work"),
+        "Expected memory limits to work with path restrictions"
+    );
 }
