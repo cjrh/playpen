@@ -4,11 +4,13 @@ use clap::builder::BoolishValueParser;
 use clap::ArgAction;
 use clap::Parser;
 use nix::unistd::execvp;
-use std::collections::HashMap;
 use std::ffi::CString;
 
 // ============ Profile Definitions ============
 
+/// A named bundle of resource limits and filesystem access tuned for a
+/// common workload (a Cargo build, a pytest run, etc.). A profile only
+/// supplies a baseline; any explicit CLI flag overrides the matching field.
 #[derive(Debug, Clone, Copy)]
 struct Profile {
     name: &'static str,
@@ -95,7 +97,7 @@ const PROFILES: &[Profile] = &[
         ro_paths: &[],
     },
     Profile {
-        name: "coding_agent",
+        name: "coding-agent",
         description: "AI coding agent (claude, codex, gemini, pi, etc.)",
         memory_limit: Some("4G"),
         cpu_quota: Some("200%"),
@@ -116,133 +118,39 @@ const PROFILES: &[Profile] = &[
     },
 ];
 
-fn find_profile(name: &str) -> Option<&'static Profile> {
-    PROFILES.iter().find(|p| p.name == name)
+/// Look up a profile by name, printing the list of valid profiles and
+/// exiting if the name is not recognized.
+fn lookup_profile(name: &str) -> &'static Profile {
+    PROFILES.iter().find(|p| p.name == name).unwrap_or_else(|| {
+        eprintln!("error: unknown profile '{}'\n", name);
+        eprintln!("Valid profiles:");
+        for p in PROFILES {
+            eprintln!("  {:12} - {}", p.name, p.description);
+        }
+        std::process::exit(1);
+    })
 }
 
+/// Expand `$HOME`, `$UID` and similar variables in a profile path.
 fn expand_path(path: &str) -> String {
     shellexpand::env(path)
         .unwrap_or_else(|_| path.into())
         .into_owned()
 }
 
-// ============ SystemdProps Builder ============
-
-#[derive(Debug)]
-struct SystemdProps {
-    props: HashMap<String, String>,
-    lists: HashMap<String, Vec<String>>,
-    lockdown_base: bool,
-    profile_applied: bool,
-}
-
-impl SystemdProps {
-    fn new() -> Self {
-        Self {
-            props: HashMap::new(),
-            lists: HashMap::new(),
-            lockdown_base: false,
-            profile_applied: false,
-        }
-    }
-
-    fn set(&mut self, key: &str, value: &str) {
-        self.props.insert(key.to_string(), value.to_string());
-    }
-
-    fn get(&self, key: &str) -> Option<&String> {
-        self.props.get(key)
-    }
-
-    fn push(&mut self, key: &str, value: String) {
-        self.lists.entry(key.to_string()).or_default().push(value);
-    }
-
-    fn apply_lockdown_base(&mut self, protect_home: &str) {
-        self.set("ProtectHome", protect_home);
-        self.set("PrivateTmp", "yes");
-        self.set("PrivateDevices", "yes");
-        self.set("ProtectKernelTunables", "yes");
-        self.set("ProtectControlGroups", "yes");
-        self.lockdown_base = true;
-    }
-
-    fn emit(self) -> Vec<String> {
-        let mut result = Vec::new();
-
-        // MemoryMax
-        if let Some(v) = self.props.get("MemoryMax") {
-            result.push(format!("-pMemoryMax={}", v));
-        }
-
-        // MemorySwapMax
-        if let Some(v) = self.props.get("MemorySwapMax") {
-            result.push(format!("-pMemorySwapMax={}", v));
-        }
-
-        // CPUQuota + CPUQuotaPeriodSec
-        if let Some(v) = self.props.get("CPUQuota") {
-            result.push(format!("-pCPUQuota={}", v));
-            result.push(format!("-pCPUQuotaPeriodSec={}", DEFAULT_CPU_QUOTA_PERIOD));
-        }
-
-        // Lockdown base (from profile or --current-dir-only)
-        if self.lockdown_base {
-            let protect_home = self
-                .props
-                .get("ProtectHome")
-                .map(|s| s.as_str())
-                .unwrap_or("no");
-            if protect_home != "no" {
-                for key in [
-                    "PrivateTmp",
-                    "PrivateDevices",
-                    "ProtectKernelTunables",
-                    "ProtectControlGroups",
-                ] {
-                    if let Some(v) = self.props.get(key) {
-                        result.push(format!("-p{}={}", key, v));
-                    }
-                }
-                result.push(format!("-pProtectHome={}", protect_home));
-                if let Ok(pwd) = std::env::current_dir() {
-                    result.push(format!("-pBindPaths={}", pwd.display()));
-                }
-            }
-        } else {
-            // Individual protection flags
-            for key in [
-                "PrivateTmp",
-                "PrivateDevices",
-                "ProtectKernelTunables",
-                "ProtectControlGroups",
-            ] {
-                if let Some(v) = self.props.get(key) {
-                    result.push(format!("-p{}={}", key, v));
-                }
-            }
-            if let Some(v) = self.props.get("ProtectHome") {
-                result.push(format!("-pProtectHome={}", v));
-            }
-            if let Some(v) = self.props.get("ProtectSystem") {
-                result.push(format!("-pProtectSystem={}", v));
-            }
-        }
-
-        // List properties (accumulated from profile and explicit flags)
-        for (key, paths) in self.lists {
-            for path in paths {
-                result.push(format!("-p{}={}", key, path));
-            }
-        }
-
-        result
+/// Add a profile path to `list`, but only if it currently exists. systemd-run
+/// refuses to start if asked to bind-mount a missing path, so a profile that
+/// names, say, `$HOME/.cargo` on a machine without Cargo simply skips it.
+fn push_if_exists(list: &mut Vec<String>, raw: &str) {
+    let expanded = expand_path(raw);
+    if std::path::Path::new(&expanded).exists() {
+        list.push(expanded);
     }
 }
 
 // ============ CLI ============
 
-const PROFILE_HELP: &str = "Use a predefined resource and filesystem profile. Valid profiles: cargo, npm, pytest, python, uv, go, make, coding_agent, shell";
+const PROFILE_HELP: &str = "Use a predefined resource and filesystem profile. Valid profiles: cargo, npm, pytest, python, uv, go, make, coding-agent, shell";
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -288,342 +196,222 @@ struct Run {
     #[arg(long, help = "Make path completely inaccessible (can be repeated)")]
     inaccessible: Vec<String>,
 
-    // Protection flags with defaults
-    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /tmp")]
-    private_tmp: bool,
+    // Protection flags. Unset means "use the default (on)"; pass an explicit
+    // value to override a profile or to turn the protection off.
+    #[arg(long, value_parser = BoolishValueParser::new(), help = "Use private /tmp (default: true)")]
+    private_tmp: Option<bool>,
 
-    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Use private /dev")]
-    private_devices: bool,
+    #[arg(long, value_parser = BoolishValueParser::new(), help = "Use private /dev (default: true)")]
+    private_devices: Option<bool>,
 
-    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect kernel tunables")]
-    protect_kernel_tunables: bool,
+    #[arg(long, value_parser = BoolishValueParser::new(), help = "Protect kernel tunables (default: true)")]
+    protect_kernel_tunables: Option<bool>,
 
-    #[arg(long, action = ArgAction::Set, value_parser = BoolishValueParser::new(), default_value = "true", help = "Protect control groups")]
-    protect_control_groups: bool,
+    #[arg(long, value_parser = BoolishValueParser::new(), help = "Protect control groups (default: true)")]
+    protect_control_groups: Option<bool>,
 
-    #[arg(
-        long,
-        default_value = "none",
-        help = "Protect home directories: none/yes/read-only/tmpfs"
-    )]
-    protect_home: String,
+    #[arg(long, help = "Protect home directories: none/yes/read-only/tmpfs")]
+    protect_home: Option<String>,
 
-    #[arg(
-        long,
-        default_value = "none",
-        help = "Protect system directories: none/yes/full/strict"
-    )]
-    protect_system: String,
+    #[arg(long, help = "Protect system directories: none/yes/full/strict")]
+    protect_system: Option<String>,
 
-    // Preset configurations
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Restrictive preset: only current directory accessible"
-    )]
+    #[arg(long, help = "Restrictive preset: only current directory accessible")]
     current_dir_only: bool,
 
     #[clap()]
     command_and_args: Vec<String>,
 }
 
-// ============ Argument Processing ============
+// ============ Resolved Configuration ============
 
-fn try_split_equals<'a>(arg: &'a str, prefix: &str) -> Option<&'a str> {
-    if arg.starts_with(prefix) && arg.as_bytes().get(prefix.len()) == Some(&b'=') {
-        Some(&arg[prefix.len() + 1..])
-    } else {
-        None
-    }
-}
-
-fn apply_profile(props: &mut SystemdProps, profile: &Profile) {
-    props.profile_applied = true;
-
-    if let Some(mem) = profile.memory_limit {
-        props.set("MemoryMax", mem);
-    }
-    if let Some(cpu) = profile.cpu_quota {
-        props.set("CPUQuota", cpu);
-    }
-    if let Some(swap) = profile.memory_swap_max {
-        props.set("MemorySwapMax", swap);
-    }
-
-    if profile.protect_home != "no" {
-        props.apply_lockdown_base(profile.protect_home);
-    }
-
-    for path in profile.rw_paths {
-        let expanded = expand_path(path);
-        if std::path::Path::new(&expanded).exists() {
-            props.push("BindPaths", expanded);
-        }
-    }
-
-    for path in profile.ro_paths {
-        let expanded = expand_path(path);
-        if std::path::Path::new(&expanded).exists() {
-            props.push("BindReadOnlyPaths", expanded);
-        }
-    }
-}
-
-fn apply_profile_by_name(props: &mut SystemdProps, name: &str) {
-    if let Some(profile) = find_profile(name) {
-        apply_profile(props, profile);
-    } else {
-        eprintln!("error: unknown profile '{}'", name);
-        eprintln!();
-        eprintln!("Valid profiles:");
-        for p in PROFILES {
-            eprintln!("  {:12} - {}", p.name, p.description);
-        }
-        std::process::exit(1);
-    }
-}
-
-#[derive(Default)]
-struct ExplicitFlags {
-    private_tmp: Option<bool>,
-    private_devices: Option<bool>,
-    protect_kernel_tunables: Option<bool>,
-    protect_control_groups: Option<bool>,
+/// The sandbox settings after a profile, the `--current-dir-only` preset and
+/// any explicit flags have all been merged. This is the single source of
+/// truth that `to_systemd_args` renders; nothing downstream re-reads the CLI.
+struct Config {
+    memory_max: Option<String>,
+    memory_swap_max: Option<String>,
+    cpu_quota: Option<String>,
+    /// systemd `ProtectHome` value (`yes`/`read-only`/`tmpfs`); `None` leaves
+    /// the home directory unrestricted.
     protect_home: Option<String>,
     protect_system: Option<String>,
+    private_tmp: bool,
+    private_devices: bool,
+    protect_kernel_tunables: bool,
+    protect_control_groups: bool,
+    bind_paths: Vec<String>,
+    bind_ro_paths: Vec<String>,
+    inaccessible_paths: Vec<String>,
+    /// Bind-mount the current directory read-write. Needed whenever the home
+    /// directory is hidden, so the project being worked on stays reachable.
+    bind_cwd: bool,
 }
 
-fn parse_boolish(s: &str) -> Option<bool> {
-    let s = s.to_lowercase();
-    if s == "true" || s == "yes" || s == "1" || s == "on" {
-        Some(true)
-    } else if s == "false" || s == "no" || s == "0" || s == "off" {
-        Some(false)
-    } else {
+impl Config {
+    /// Merge CLI arguments into the final sandbox configuration.
+    ///
+    /// Precedence, lowest to highest: built-in defaults, then `--profile`,
+    /// then `--current-dir-only`, then explicit per-setting flags. Command-line
+    /// order is irrelevant — an explicit flag always beats the profile. Path
+    /// flags (`--rw`/`--ro`/`--inaccessible`) accumulate rather than override.
+    fn resolve(cli: &Run) -> Config {
+        // Defaults: the four namespace protections are on; nothing else set.
+        let mut c = Config {
+            memory_max: None,
+            memory_swap_max: None,
+            cpu_quota: None,
+            protect_home: None,
+            protect_system: None,
+            private_tmp: true,
+            private_devices: true,
+            protect_kernel_tunables: true,
+            protect_control_groups: true,
+            bind_paths: Vec::new(),
+            bind_ro_paths: Vec::new(),
+            inaccessible_paths: Vec::new(),
+            bind_cwd: false,
+        };
+
+        // Profile baseline.
+        let profile = cli.profile.as_deref().map(lookup_profile);
+        if let Some(p) = profile {
+            c.memory_max = p.memory_limit.map(String::from);
+            c.cpu_quota = p.cpu_quota.map(String::from);
+            c.memory_swap_max = p.memory_swap_max.map(String::from);
+            c.protect_home = Some(p.protect_home.to_string());
+            c.bind_cwd = true;
+            for path in p.rw_paths {
+                push_if_exists(&mut c.bind_paths, path);
+            }
+            for path in p.ro_paths {
+                push_if_exists(&mut c.bind_ro_paths, path);
+            }
+        }
+
+        // The --current-dir-only preset: hide home, keep only the cwd.
+        if cli.current_dir_only {
+            c.protect_home = Some("tmpfs".to_string());
+            c.bind_cwd = true;
+        }
+
+        // Explicit flags override the profile and preset above.
+        if let Some(v) = &cli.memory_limit {
+            c.memory_max = Some(v.clone());
+        }
+        if let Some(v) = &cli.cpu_limit {
+            c.cpu_quota = Some(v.clone());
+        }
+        if let Some(v) = &cli.memory_swap_max {
+            c.memory_swap_max = Some(v.clone());
+        }
+        if let Some(v) = &cli.protect_home {
+            c.protect_home = normalize_protect(v);
+        }
+        if let Some(v) = &cli.protect_system {
+            c.protect_system = normalize_protect(v);
+        }
+        if let Some(v) = cli.private_tmp {
+            c.private_tmp = v;
+        }
+        if let Some(v) = cli.private_devices {
+            c.private_devices = v;
+        }
+        if let Some(v) = cli.protect_kernel_tunables {
+            c.protect_kernel_tunables = v;
+        }
+        if let Some(v) = cli.protect_control_groups {
+            c.protect_control_groups = v;
+        }
+
+        // Path flags accumulate on top of any profile paths.
+        c.bind_paths.extend(cli.rw_paths.iter().cloned());
+        c.bind_ro_paths.extend(cli.ro_paths.iter().cloned());
+        c.inaccessible_paths
+            .extend(cli.inaccessible.iter().cloned());
+
+        // A bare memory limit gets a hard ceiling by disabling swap. Profiles
+        // pick their own swap policy, so this default applies only when no
+        // profile is active.
+        if c.memory_max.is_some() && c.memory_swap_max.is_none() && profile.is_none() {
+            c.memory_swap_max = Some("0".to_string());
+        }
+
+        c
+    }
+
+    /// Render the configuration as `systemd-run` `-p` property arguments.
+    fn to_systemd_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+
+        if let Some(v) = &self.memory_max {
+            args.push(format!("-pMemoryMax={}", v));
+        }
+        if let Some(v) = &self.memory_swap_max {
+            args.push(format!("-pMemorySwapMax={}", v));
+        }
+        if let Some(v) = &self.cpu_quota {
+            args.push(format!("-pCPUQuota={}", v));
+            args.push(format!("-pCPUQuotaPeriodSec={}", DEFAULT_CPU_QUOTA_PERIOD));
+        }
+        if self.private_tmp {
+            args.push("-pPrivateTmp=yes".to_string());
+        }
+        if self.private_devices {
+            args.push("-pPrivateDevices=yes".to_string());
+        }
+        if self.protect_kernel_tunables {
+            args.push("-pProtectKernelTunables=yes".to_string());
+        }
+        if self.protect_control_groups {
+            args.push("-pProtectControlGroups=yes".to_string());
+        }
+        if let Some(v) = &self.protect_home {
+            args.push(format!("-pProtectHome={}", v));
+        }
+        if let Some(v) = &self.protect_system {
+            args.push(format!("-pProtectSystem={}", v));
+        }
+
+        if self.bind_cwd {
+            if let Ok(pwd) = std::env::current_dir() {
+                args.push(format!("-pBindPaths={}", pwd.display()));
+            }
+        }
+        for p in &self.bind_paths {
+            args.push(format!("-pBindPaths={}", p));
+        }
+        for p in &self.bind_ro_paths {
+            args.push(format!("-pBindReadOnlyPaths={}", p));
+        }
+        for p in &self.inaccessible_paths {
+            args.push(format!("-pInaccessiblePaths={}", p));
+        }
+
+        args
+    }
+}
+
+/// Translate a `--protect-home`/`--protect-system` value into an emittable
+/// setting: the sentinel `none` means "do not restrict" (`None`).
+fn normalize_protect(value: &str) -> Option<String> {
+    if value == "none" {
         None
-    }
-}
-
-fn process_ordered_args(props: &mut SystemdProps, explicit: &mut ExplicitFlags) {
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1; // skip program name
-
-    while i < args.len() {
-        let arg = &args[i];
-
-        // Stop at -- (command separator)
-        if arg == "--" {
-            break;
-        }
-
-        // Try --flag=value format first
-        if let Some(value) = try_split_equals(arg, "--profile") {
-            apply_profile_by_name(props, value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "-m") {
-            props.set("MemoryMax", value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--memory-limit") {
-            props.set("MemoryMax", value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "-c") {
-            props.set("CPUQuota", value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--cpu-limit") {
-            props.set("CPUQuota", value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--memory-swap-max") {
-            props.set("MemorySwapMax", value);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--protect-home") {
-            let normalized = if value == "none" {
-                "no".to_string()
-            } else {
-                value.to_string()
-            };
-            props.set("ProtectHome", &normalized);
-            explicit.protect_home = Some(normalized);
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--protect-system") {
-            props.set("ProtectSystem", value);
-            explicit.protect_system = Some(value.to_string());
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--private-tmp") {
-            if let Some(b) = parse_boolish(value) {
-                props.set("PrivateTmp", if b { "yes" } else { "no" });
-                explicit.private_tmp = Some(b);
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--private-devices") {
-            if let Some(b) = parse_boolish(value) {
-                props.set("PrivateDevices", if b { "yes" } else { "no" });
-                explicit.private_devices = Some(b);
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--protect-kernel-tunables") {
-            if let Some(b) = parse_boolish(value) {
-                props.set("ProtectKernelTunables", if b { "yes" } else { "no" });
-                explicit.protect_kernel_tunables = Some(b);
-            }
-            i += 1;
-            continue;
-        }
-        if let Some(value) = try_split_equals(arg, "--protect-control-groups") {
-            if let Some(b) = parse_boolish(value) {
-                props.set("ProtectControlGroups", if b { "yes" } else { "no" });
-                explicit.protect_control_groups = Some(b);
-            }
-            i += 1;
-            continue;
-        }
-
-        // Then --flag value format
-        match arg.as_str() {
-            "--profile" => {
-                i += 1;
-                if i < args.len() {
-                    apply_profile_by_name(props, &args[i]);
-                }
-            }
-            "-m" | "--memory-limit" => {
-                i += 1;
-                if i < args.len() {
-                    props.set("MemoryMax", &args[i]);
-                }
-            }
-            "-c" | "--cpu-limit" => {
-                i += 1;
-                if i < args.len() {
-                    props.set("CPUQuota", &args[i]);
-                }
-            }
-            "--memory-swap-max" => {
-                i += 1;
-                if i < args.len() {
-                    props.set("MemorySwapMax", &args[i]);
-                }
-            }
-            "--protect-home" => {
-                i += 1;
-                if i < args.len() {
-                    let value = &args[i];
-                    let normalized = if value == "none" {
-                        "no".to_string()
-                    } else {
-                        value.to_string()
-                    };
-                    props.set("ProtectHome", &normalized);
-                    explicit.protect_home = Some(normalized);
-                }
-            }
-            "--protect-system" => {
-                i += 1;
-                if i < args.len() {
-                    props.set("ProtectSystem", &args[i]);
-                    explicit.protect_system = Some(args[i].clone());
-                }
-            }
-            "--private-tmp" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(b) = parse_boolish(&args[i]) {
-                        props.set("PrivateTmp", if b { "yes" } else { "no" });
-                        explicit.private_tmp = Some(b);
-                    }
-                }
-            }
-            "--private-devices" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(b) = parse_boolish(&args[i]) {
-                        props.set("PrivateDevices", if b { "yes" } else { "no" });
-                        explicit.private_devices = Some(b);
-                    }
-                }
-            }
-            "--protect-kernel-tunables" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(b) = parse_boolish(&args[i]) {
-                        props.set("ProtectKernelTunables", if b { "yes" } else { "no" });
-                        explicit.protect_kernel_tunables = Some(b);
-                    }
-                }
-            }
-            "--protect-control-groups" => {
-                i += 1;
-                if i < args.len() {
-                    if let Some(b) = parse_boolish(&args[i]) {
-                        props.set("ProtectControlGroups", if b { "yes" } else { "no" });
-                        explicit.protect_control_groups = Some(b);
-                    }
-                }
-            }
-            "--current-dir-only" => {
-                props.apply_lockdown_base("tmpfs");
-            }
-            _ => {}
-        }
-
-        i += 1;
-    }
-}
-
-fn apply_defaults(props: &mut SystemdProps, explicit: &ExplicitFlags) {
-    // If no lockdown base was applied, apply default protections for flags
-    // that were not explicitly set by the user.
-    if props.lockdown_base {
-        return;
-    }
-    if explicit.private_tmp.is_none() {
-        props.set("PrivateTmp", "yes");
-    }
-    if explicit.private_devices.is_none() {
-        props.set("PrivateDevices", "yes");
-    }
-    if explicit.protect_kernel_tunables.is_none() {
-        props.set("ProtectKernelTunables", "yes");
-    }
-    if explicit.protect_control_groups.is_none() {
-        props.set("ProtectControlGroups", "yes");
-    }
-}
-
-fn shell_quote(s: &str) -> String {
-    if s.contains(' ')
-        || s.contains('"')
-        || s.contains('\'')
-        || s.contains('$')
-        || s.contains('&')
-        || s.contains('|')
-        || s.contains(';')
-        || s.contains('<')
-        || s.contains('>')
-        || s.contains('`')
-    {
-        format!("'{}'", s.replace('\'', "'\\''"))
     } else {
+        Some(value.to_string())
+    }
+}
+
+/// Quote an argument for safe display in `--dry-run` output. Anything outside
+/// a conservative set of shell-safe characters is single-quoted.
+fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-./=:%+,".contains(&b));
+    if safe {
         s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
 
@@ -664,49 +452,12 @@ fn main() -> Result<()> {
         parts.push("--quiet".to_string());
     }
 
-    // Build systemd properties with rightmost-wins semantics
-    let mut props = SystemdProps::new();
-    let mut explicit = ExplicitFlags::default();
-
-    // Process compound settings and resource limits in command-line order
-    process_ordered_args(&mut props, &mut explicit);
-
-    // Apply defaults for flags not explicitly set
-    apply_defaults(&mut props, &explicit);
-
-    // Add user-specified path controls (accumulate with profile paths)
-    for path in &cli.rw_paths {
-        props.push("BindPaths", path.clone());
-    }
-    for path in &cli.ro_paths {
-        props.push("BindReadOnlyPaths", path.clone());
-    }
-    for path in &cli.inaccessible {
-        props.push("InaccessiblePaths", path.clone());
-    }
-
-    // Default swap behavior when no profile and no explicit --memory-swap-max
-    if props.get("MemoryMax").is_some()
-        && props.get("MemorySwapMax").is_none()
-        && !props.profile_applied
-    {
-        props.set("MemorySwapMax", "0");
-    }
-
-    // Emit properties
-    parts.extend(props.emit());
-
+    parts.extend(Config::resolve(&cli).to_systemd_args());
     parts.extend(cli.command_and_args.clone());
 
     if cli.dry_run {
-        println!(
-            "{}",
-            parts
-                .iter()
-                .map(|s| shell_quote(s))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+        let rendered: Vec<String> = parts.iter().map(|s| shell_quote(s)).collect();
+        println!("{}", rendered.join(" "));
         return Ok(());
     }
 

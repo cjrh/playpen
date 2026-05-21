@@ -75,14 +75,14 @@ fn test_shell_profile_dry_run() {
 
 #[test]
 fn test_coding_agent_profile_dry_run() {
-    // Create a fake home directory with the paths the coding_agent profile expects
+    // Create a fake home directory with the paths the coding-agent profile expects
     let temp_home = common::create_temp_dir();
     std::fs::write(temp_home.path().join(".gitconfig"), "[user]\nname = test\n").unwrap();
     std::fs::create_dir(temp_home.path().join(".ssh")).unwrap();
 
     let mut cmd = Command::new(common::get_playpen_path());
     cmd.env("HOME", temp_home.path());
-    cmd.args(["--profile", "coding_agent", "--dry-run", "--", "claude"]);
+    cmd.args(["--profile", "coding-agent", "--dry-run", "--", "claude"]);
 
     cmd.assert()
         .success()
@@ -118,7 +118,9 @@ fn test_explicit_after_profile_overrides() {
 }
 
 #[test]
-fn test_profile_after_explicit_overrides() {
+fn test_explicit_overrides_profile_regardless_of_order() {
+    // An explicit flag beats the profile even when it appears *before*
+    // --profile on the command line; argument order does not matter.
     let mut cmd = Command::new(common::get_playpen_path());
     cmd.args([
         "-m",
@@ -133,7 +135,7 @@ fn test_profile_after_explicit_overrides() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("-pMemoryMax=2G"));
+        .stdout(predicate::str::contains("-pMemoryMax=4G"));
 }
 
 #[test]
@@ -182,37 +184,20 @@ fn test_profile_plus_explicit_rw_accumulates() {
 }
 
 #[test]
-fn test_preset_after_profile_overrides() {
-    let mut cmd = Command::new(common::get_playpen_path());
-    cmd.args([
-        "--profile",
-        "shell",
-        "--current-dir-only",
-        "--dry-run",
-        "--",
-        "bash",
-    ]);
+fn test_current_dir_only_overrides_profile_regardless_of_order() {
+    // --current-dir-only always applies its tmpfs lockdown, overriding the
+    // profile's protect_home no matter which side of --profile it appears on.
+    for args in [
+        ["--profile", "shell", "--current-dir-only"],
+        ["--current-dir-only", "--profile", "shell"],
+    ] {
+        let mut cmd = Command::new(common::get_playpen_path());
+        cmd.args(args).args(["--dry-run", "--", "bash"]);
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("-pProtectHome=tmpfs"));
-}
-
-#[test]
-fn test_profile_after_preset_overrides() {
-    let mut cmd = Command::new(common::get_playpen_path());
-    cmd.args([
-        "--current-dir-only",
-        "--profile",
-        "shell",
-        "--dry-run",
-        "--",
-        "bash",
-    ]);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("-pProtectHome=read-only"));
+        cmd.assert()
+            .success()
+            .stdout(predicate::str::contains("-pProtectHome=tmpfs"));
+    }
 }
 
 #[test]

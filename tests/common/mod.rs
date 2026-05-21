@@ -53,5 +53,3 @@ pub fn node_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
-
-

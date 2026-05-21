@@ -180,7 +180,7 @@ useful ;).
 | `uv` | Python uv dependency management | 256M | 200% | disabled |
 | `go` | Go builds and tests | 512M | 300% | **enabled** |
 | `make` | C/C++ make/cmake builds | 2G | 300% | disabled |
-| `coding_agent` | AI coding agents (claude, codex, gemini, pi, etc.) | 4G | 200% | disabled |
+| `coding-agent` | AI coding agents (claude, codex, gemini, pi, etc.) | 4G | 200% | disabled |
 | `shell` | Interactive shell/terminal session | 4G | unlimited | disabled |
 
 ### Basic Usage
@@ -203,7 +203,7 @@ $ playpen --profile shell -- bash
 
 ### Overriding Profile Settings
 
-All profile settings can be overridden by specifying flags after the profile. Arguments are processed left-to-right, and the **rightmost** occurrence of any setting wins:
+A profile only supplies a baseline. Any explicit flag you pass overrides the matching profile setting, **regardless of command-line order**. Path flags (`--rw`/`--ro`/`--inaccessible`) accumulate on top of the profile's paths rather than replacing them:
 
 ```bash
 # Override the memory limit
@@ -218,7 +218,7 @@ $ playpen --profile cargo --rw $HOME/.ccache -- cargo build
 
 ### AI Coding Agent Profile
 
-The `coding_agent` profile is designed for AI coding assistants. It hides the entire home directory by default (using `ProtectHome=tmpfs`) to prevent agents from reading secrets in dotfiles, then selectively exposes only what's needed for git operations:
+The `coding-agent` profile is designed for AI coding assistants. It hides the entire home directory by default (using `ProtectHome=tmpfs`) to prevent agents from reading secrets in dotfiles, then selectively exposes only what's needed for git operations:
 
 - `~/.gitconfig` (read-only) — git identity for commits
 - `~/.ssh` (read-only) — SSH keys for git push/pull
@@ -228,16 +228,16 @@ Agent-specific config directories are **not** included in the profile (for secur
 
 ```bash
 # Claude Code
-$ playpen --profile coding_agent --rw ~/.claude --ro ~/.claude.json -- claude
+$ playpen --profile coding-agent --rw ~/.claude --ro ~/.claude.json -- claude
 
 # OpenAI Codex
-$ playpen --profile coding_agent --rw ~/.codex -- codex
+$ playpen --profile coding-agent --rw ~/.codex -- codex
 
 # Gemini CLI
-$ playpen --profile coding_agent --rw ~/.gemini -- gemini
+$ playpen --profile coding-agent --rw ~/.gemini -- gemini
 
 # pi
-$ playpen --profile coding_agent --rw ~/.pi -- pi
+$ playpen --profile coding-agent --rw ~/.pi -- pi
 ```
 
 ### Shell Profile
@@ -268,7 +268,7 @@ $ playpen --profile cargo --dry-run -- cargo build
 With `ProtectHome=tmpfs`, home directories are replaced by an empty tmpfs. If a path like `~/.claude.json` is a symlink (e.g., `~/.claude.json -> stowfiles/.claude.json`), bind-mounting only the symlink will create a broken link because the target is also under the hidden `/home` tree. To fix this, also bind-mount the target directory:
 
 ```bash
-$ playpen --profile coding_agent --ro ~/.claude.json --ro ~/stowfiles -- claude
+$ playpen --profile coding-agent --ro ~/.claude.json --ro ~/stowfiles -- claude
 ```
 
 ## Path Restrictions
@@ -560,20 +560,20 @@ playpen --profile pytest -- pytest
 
 ### Running an AI coding agent
 
-Use the `coding_agent` profile, then add the config directories for your specific agent. The profile hides the entire home directory by default, then selectively exposes git config and SSH keys needed for git operations.
+Use the `coding-agent` profile, then add the config directories for your specific agent. The profile hides the entire home directory by default, then selectively exposes git config and SSH keys needed for git operations.
 
 ```
 # Claude Code
-playpen --profile coding_agent --rw ~/.claude --ro ~/.claude.json -- claude
+playpen --profile coding-agent --rw ~/.claude --ro ~/.claude.json -- claude
 
 # OpenAI Codex
-playpen --profile coding_agent --rw ~/.codex -- codex
+playpen --profile coding-agent --rw ~/.codex -- codex
 
 # Gemini CLI
-playpen --profile coding_agent --rw ~/.gemini -- gemini
+playpen --profile coding-agent --rw ~/.gemini -- gemini
 
 # pi
-playpen --profile coding_agent --rw ~/.pi -- pi
+playpen --profile coding-agent --rw ~/.pi -- pi
 ```
 
 ### Interactive shell session
