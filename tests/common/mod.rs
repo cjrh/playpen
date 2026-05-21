@@ -1,3 +1,8 @@
+// This file is included via `mod common;` in every integration test binary.
+// A helper used by only one of those binaries looks "never used" to the
+// others, so dead-code warnings here are unavoidable false positives.
+#![allow(dead_code)]
+
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -24,11 +29,6 @@ pub fn get_playpen_path() -> PathBuf {
 
     path.push("playpen");
     path
-}
-
-/// Run a command and return the output
-pub fn run_command(cmd: &mut Command) -> std::process::Output {
-    cmd.output().expect("Failed to execute command")
 }
 
 /// Create a temporary directory for testing
