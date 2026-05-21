@@ -4,7 +4,7 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/cjrh/playpen/badge.svg?branch=main)](https://coveralls.io/github/cjrh/playpen?branch=main)
 
-Program launcher with memory, cpu, and path limits
+Program launcher with memory, cpu, disk I/O, and path limits
 
 ## Overview
 
@@ -51,6 +51,12 @@ Options:
 
   -c, --cpu-limit <CPU_LIMIT>
 
+  -d, --disk-limit <VALUE>
+          Limit disk I/O bandwidth, read and write, for the working directory's device (e.g. 50M, 500K)
+      --disk-read <VALUE>
+          Limit disk read bandwidth only; overrides --disk-limit for reads
+      --disk-write <VALUE>
+          Limit disk write bandwidth only; overrides --disk-limit for writes
   -q, --quiet
 
       --capture-env <CAPTURE_ENV>
@@ -162,6 +168,30 @@ For CPU, "100%" means 1 core, "200%" means 2 cores, and so on. This can
 be used to force a process to run on fewer than all available cores
 on a machine if the process does not have a simple, built-in way to limit 
 itself.
+
+A disk I/O bandwidth limit can also be set:
+
+```
+$ playpen -d 50M -- cargo build
+```
+
+`-d` caps both read and write throughput for the block device backing the
+working directory — the disk where a sandboxed build does its real work.
+This keeps an I/O-heavy task (a big build, a bulk copy) from saturating the
+disk and making the rest of the machine sluggish. Values are byte-per-second
+rates using the same `K`/`M`/`G`/`T` suffixes as the memory limit, so `50M`
+means 50 MB/s.
+
+To cap reads and writes separately, use `--disk-read` and `--disk-write`.
+Each overrides `-d` for its own direction:
+
+```
+# Reads limited to 10 MB/s, writes to 50 MB/s.
+$ playpen -d 50M --disk-read 10M -- cargo build
+```
+
+The limit applies to the device behind the current directory; I/O to other
+devices (and to `/tmp`, which playpen makes a private tmpfs) is unaffected.
 
 ## Capturing `$PATH` and the environment
 

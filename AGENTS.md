@@ -112,6 +112,7 @@ All tests are integration tests in the `tests/` directory:
 - **`tests/test_npm_project.rs`** — 5 tests for npm-specific sandboxing (requires npm/node on the system; skips if unavailable)
 - **`tests/test_profiles.rs`** — 13 tests for profile dry-run output, override precedence (explicit flags beat the profile, order-independent), unknown profile errors, and path accumulation
 - **`tests/test_network.rs`** — 23 tests for network-control flags (`--private-network`, `--ip-allow`/`--ip-deny`, `--socket-bind-allow`/`--socket-bind-deny`); all use `--dry-run` and run everywhere
+- **`tests/test_disk_io.rs`** — 8 tests for disk I/O bandwidth flags (`--disk-limit`/`-d`, `--disk-read`, `--disk-write`), including direction override precedence; all use `--dry-run` and run everywhere
 
 Tests that invoke `systemd-run` for real (`test_home_access.rs`, `test_npm_project.rs`) are marked `#[ignore]` because GitHub-hosted CI runners cannot set up the mount namespaces they need (systemd exit code 218). Run them locally with `cargo test -- --include-ignored`. The `test_profiles.rs` tests use `--dry-run` and run everywhere.
 - **`tests/common/mod.rs`** — Shared test utilities and binary path resolution. Carries `#![allow(dead_code)]`: it is compiled into every test binary, so a helper used by only one of them looks dead to the others.
@@ -142,7 +143,7 @@ Unit and integration test coverage is automatically merged. The CI workflow at `
 ## Project Organization
 
 - **`src/main.rs`** — Single binary source
-- **`tests/`** — Integration tests (`test_home_access.rs`, `test_npm_project.rs`, `test_profiles.rs`, `test_network.rs`)
+- **`tests/`** — Integration tests (`test_home_access.rs`, `test_npm_project.rs`, `test_profiles.rs`, `test_network.rs`, `test_disk_io.rs`)
 - **`.cargo/config.toml`** — Cargo aliases (`coverage`, `coverage-html`)
 - **`plans/`** — Design documents and implementation plans (e.g., `PROFILES_PLAN.md`)
 
