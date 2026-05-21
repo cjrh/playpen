@@ -52,11 +52,21 @@ Options:
       --protect-control-groups <PROTECT_CONTROL_GROUPS>
           Protect control groups [default: true] [possible values: true, false]
       --protect-home <PROTECT_HOME>
-          Protect home directories: none/yes/read-only/tmpfs [default: none]
+          Protect home directories: none/yes/read-only/tmpfs
       --protect-system <PROTECT_SYSTEM>
-          Protect system directories: none/yes/full/strict [default: none]
-      --current-dir-only <CURRENT_DIR_ONLY>
-          Restrictive preset: only current directory accessible [default: false] [possible values: true, false]
+          Protect system directories: none/yes/full/strict
+      --private-network <PRIVATE_NETWORK>
+          Use a private network namespace, no external network (default: off) [possible values: true, false]
+      --ip-allow <IP_ALLOW>
+          Allow IP/CIDR for network traffic (can be repeated)
+      --ip-deny <IP_DENY>
+          Deny IP/CIDR for network traffic (can be repeated)
+      --socket-bind-allow <SOCKET_BIND_ALLOW>
+          Allow bind() rule for listening sockets (can be repeated)
+      --socket-bind-deny <SOCKET_BIND_DENY>
+          Deny bind() rule for listening sockets (can be repeated)
+      --current-dir-only
+          Restrictive preset: only current directory accessible
   -h, --help
           Print help
   -V, --version
@@ -366,6 +376,84 @@ $ playpen --current-dir-only --rw ~/.npm -m 2G -- npm install
 # Run tests with extra protection
 $ playpen --current-dir-only --private-tmp -m 1G -- npm test
 ```
+
+## Network Control
+
+Playpen can restrict a sandboxed process's network access. Network control is
+**opt-in**: by default a process has full network access, and no profile
+changes that. Three independent controls are available.
+
+### `--private-network` — full network isolation
+
+`--private-network true` puts the process in a private network namespace with
+only a loopback device. This kills **all** external network access — DNS, HTTP,
+SSH, everything — leaving only `127.0.0.1`.
+
+```bash
+# No external network at all
+$ playpen --private-network true -- ./run-offline-tests
+
+# Loopback still works
+$ playpen --private-network true -- ping 127.0.0.1
+```
+
+This is the strongest control: namespace isolation rather than packet
+filtering. It follows the standard precedence — an explicit `--private-network`
+beats the profile regardless of command-line order.
+
+### `--ip-allow` / `--ip-deny` — IP-level filtering
+
+These map to systemd's `IPAddressAllow=`/`IPAddressDeny=` BPF filters and keep
+the network otherwise available. They accept **IP addresses, CIDR ranges, and
+systemd symbolic names only** (`any`, `localhost`, `link-local`, `multicast`) —
+**not** hostnames. Both flags can be repeated.
+
+Per-packet evaluation: a match in the allow-list wins; otherwise a match in the
+deny-list denies; otherwise the packet is allowed. To build an allow-list
+firewall, deny everything and then add exceptions:
+
+```bash
+# Allow only localhost traffic
+$ playpen --ip-deny any --ip-allow localhost -- ./my-test
+
+# Allow only a specific host
+$ playpen --ip-deny any --ip-allow 192.168.1.100 -- ./my-client
+
+# Deny just one range, leave the rest open
+$ playpen --ip-deny 10.0.0.0/8 -- ./my-app
+```
+
+> Hostname/domain filtering is intentionally not supported: systemd filters by
+> IP, and a launch-time DNS snapshot would be stale and misleading (one CDN IP
+> fronts many domains). Use a filtering proxy if you need domain-level egress
+> control.
+
+### `--socket-bind-allow` / `--socket-bind-deny` — listen restrictions
+
+These control which addresses/ports a process may `bind()` — i.e. **listen**
+on. They do not affect outbound connections. Syntax is
+`[address-family:][transport-protocol:][ip-ports]` or `any`. Both flags can be
+repeated, and evaluation follows the same allow-wins-then-deny order.
+
+```bash
+# Process cannot start any server
+$ playpen --socket-bind-deny any -- ./my-test
+
+# Allow listening only on port 8080
+$ playpen --socket-bind-allow 8080 --socket-bind-deny any -- ./my-server
+
+# Allow only TCP on port 8080
+$ playpen --socket-bind-allow ipv4:tcp:8080 --socket-bind-deny any -- ./my-server
+```
+
+### Choosing between them
+
+`PrivateNetwork=yes` (namespace isolation) is stronger than IP filtering (a BPF
+filter). With `--private-network true` there are no external interfaces, so IP
+filters have nothing external to act on — combining the two is redundant. Use
+`--private-network` for full isolation and IP filtering for selective access.
+The values you pass to the list flags are forwarded to `systemd-run` verbatim;
+an invalid value surfaces as a `systemd-run` error.
 
 ## Examples
 
