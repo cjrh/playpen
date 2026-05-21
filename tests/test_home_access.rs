@@ -3,6 +3,7 @@ use std::process::Command;
 mod common;
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_no_protection_home_access() {
     // Test that without protection, we can see home directory contents
     let output = Command::new(common::get_playpen_path())
@@ -24,6 +25,7 @@ fn test_no_protection_home_access() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_protect_home_tmpfs() {
     // Test that with tmpfs protection, home directory appears empty or minimal
     // Run from root directory to avoid conflicts with protection
@@ -53,6 +55,7 @@ fn test_protect_home_tmpfs() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_blocks_home() {
     let temp_dir = common::create_temp_dir();
 
@@ -90,6 +93,7 @@ except Exception as e:
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_allows_pwd() {
     let temp_dir = common::create_temp_dir();
 
@@ -117,6 +121,7 @@ fn test_current_dir_only_allows_pwd() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_current_dir_only_blocks_sensitive_files() {
     let temp_dir = common::create_temp_dir();
 
@@ -158,6 +163,7 @@ fn test_current_dir_only_blocks_sensitive_files() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_fine_grained_ro_access() {
     // Test read-only access to /etc from root directory to avoid conflicts
     let output = Command::new(common::get_playpen_path())
@@ -198,6 +204,7 @@ fn test_fine_grained_ro_access() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_fine_grained_rw_access() {
     let temp_dir = common::create_temp_dir();
     let test_file = temp_dir.path().join("test_write.txt");
@@ -232,6 +239,7 @@ fn test_fine_grained_rw_access() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_inaccessible_paths() {
     let temp_dir = common::create_temp_dir();
 
@@ -250,6 +258,7 @@ fn test_inaccessible_paths() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_memory_limit_still_works() {
     let temp_dir = common::create_temp_dir();
 

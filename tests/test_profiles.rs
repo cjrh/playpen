@@ -254,7 +254,6 @@ fn test_nonexistent_profile_path_skipped() {
     cmd.args(["--profile", "pytest", "--dry-run", "--", "echo", "hello"]);
 
     let output = cmd.output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
 
     // pytest profile has ro_paths=["$HOME/.local/lib"] which may or may not exist
     // If it exists, it should be in the output; if not, it should be silently skipped

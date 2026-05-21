@@ -24,6 +24,7 @@ fn npm_config_get(field: &str) -> Option<String> {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_project_without_protection() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -76,6 +77,7 @@ fn test_npm_project_without_protection() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_project_with_current_dir_only() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -132,6 +134,7 @@ fn test_npm_project_with_current_dir_only() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_install_with_protection() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -202,6 +205,7 @@ fn test_npm_install_with_protection() {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_express_server_home_access() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
@@ -423,6 +427,7 @@ setTimeout(() => {
 }
 
 #[test]
+#[ignore = "requires systemd mount-namespace support; run locally with: cargo test -- --include-ignored"]
 fn test_npm_script_file_access() {
     if !common::npm_available() || !common::node_available() {
         eprintln!("Skipping npm tests: npm or node not available");
