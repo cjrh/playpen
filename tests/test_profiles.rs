@@ -93,13 +93,10 @@ fn test_coding_agent_profile_dry_run() {
         .stdout(predicate::str::contains("-pMemoryMax=4G"))
         .stdout(predicate::str::contains("-pCPUQuota=200%"))
         .stdout(predicate::str::contains("-pProtectHome=tmpfs"))
-        .stdout(
-            predicate::str::contains("-pBindReadOnlyPaths=")
-                .and(predicate::str::contains("/.gitconfig")),
-        )
-        .stdout(
-            predicate::str::contains("-pBindReadOnlyPaths=").and(predicate::str::contains("/.ssh")),
-        );
+        .stdout(predicate::str::contains("-pProtectSystem=strict"))
+        .stdout(predicate::str::contains("-pMemorySwapMax=0"))
+        .stdout(predicate::str::contains("/.gitconfig").not())
+        .stdout(predicate::str::contains("/.ssh").not());
 }
 
 #[test]

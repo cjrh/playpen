@@ -1,10 +1,12 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use atty::Stream;
 use clap::builder::BoolishValueParser;
 use clap::ArgAction;
 use clap::Parser;
 use nix::unistd::execvp;
 use std::ffi::CString;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 // ============ Profile Definitions ============
 
@@ -19,6 +21,9 @@ struct Profile {
     cpu_quota: Option<&'static str>,
     memory_swap_max: Option<&'static str>,
     protect_home: &'static str,
+    protect_system: Option<&'static str>,
+    /// Discover common agent state/tools and use an allowlisted environment.
+    agent_access: bool,
     /// Network isolation opinion. `Some(true)` = `PrivateNetwork=yes`,
     /// `Some(false)` = `PrivateNetwork=no`, `None` = no opinion (the property
     /// is not emitted, leaving network available — systemd's default).
@@ -44,6 +49,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &["$HOME/.cargo"],
         ro_paths: &["$HOME/.rustup"],
@@ -55,6 +62,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &["$HOME/.npm", "$HOME/.cache/yarn", "$HOME/.local/share/pnpm"],
         ro_paths: &["$HOME/.local/share/fnm", "/run/user/$UID"],
@@ -66,6 +75,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &[],
         ro_paths: &["$HOME/.local/lib"],
@@ -77,6 +88,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("100%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &[],
         ro_paths: &["$HOME/.local/lib"],
@@ -88,6 +101,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &["$HOME/.cache/uv", "$HOME/.local/share/uv"],
         ro_paths: &[],
@@ -99,6 +114,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: None,
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &["$HOME/go", "$HOME/.cache/go-build"],
         ro_paths: &[],
@@ -110,20 +127,39 @@ const PROFILES: &[Profile] = &[
         cpu_quota: Some("300%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &[],
         ro_paths: &[],
     },
     Profile {
         name: "coding-agent",
-        description: "AI coding agent (claude, codex, gemini, pi, etc.)",
+        description: "AI coding agents with shared agent state and restricted host access",
         memory_limit: Some("4G"),
         cpu_quota: Some("200%"),
         memory_swap_max: Some("0"),
         protect_home: "tmpfs",
+        protect_system: Some("strict"),
+        agent_access: true,
         private_network: None,
-        rw_paths: &[],
-        ro_paths: &["$HOME/.gitconfig", "$HOME/.ssh"],
+        rw_paths: &[
+            "$HOME/.claude",
+            "$HOME/.codex",
+            "$HOME/.gemini",
+            "$HOME/.pi/agent",
+            "$HOME/.pi/context-mode",
+            "$HOME/.pi/web-search-cache",
+            "$HOME/.pi/web-search.json",
+            "$HOME/.cargo/registry",
+            "$HOME/.cargo/git",
+        ],
+        ro_paths: &[
+            "$HOME/.agents",
+            "$HOME/.cargo/bin",
+            "$HOME/.rustup",
+            "$HOME/.local/share/claude",
+        ],
     },
     Profile {
         name: "shell",
@@ -132,6 +168,8 @@ const PROFILES: &[Profile] = &[
         cpu_quota: None,
         memory_swap_max: Some("0"),
         protect_home: "read-only",
+        protect_system: None,
+        agent_access: false,
         private_network: None,
         rw_paths: &["$HOME/.local/share", "$HOME/.cache", "$HOME/.local/bin"],
         ro_paths: &[],
@@ -166,6 +204,239 @@ fn push_if_exists(list: &mut Vec<String>, raw: &str) {
     if std::path::Path::new(&expanded).exists() {
         list.push(expanded);
     }
+}
+
+/// Refuse automatic mounts whose symlinks could expose an unrelated tree.
+/// Explicit mounts are a deliberate escape hatch; do not second-guess them.
+fn push_agent_path(list: &mut Vec<String>, raw: &str, explicit: &[String]) -> Result<()> {
+    push_agent_mount(list, Path::new(&expand_path(raw)), explicit)
+}
+
+fn push_agent_mount(list: &mut Vec<String>, path: &Path, explicit: &[String]) -> Result<()> {
+    if explicit.iter().any(|p| Path::new(p) == path) {
+        return Ok(());
+    }
+    match path.canonicalize() {
+        Ok(target) => {
+            if target != path {
+                bail!(
+                    "automatic coding-agent mount {} resolves to {}; review it and use an explicit --rw/--ro mount",
+                    path.display(), target.display()
+                );
+            }
+            list.push(path.to_string_lossy().into_owned());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("inspect agent path {}", path.display())),
+    }
+    Ok(())
+}
+
+/// The cwd is always writable, so a broad or sensitive cwd defeats hidden home.
+fn validate_agent_workspace() -> Result<()> {
+    let home = PathBuf::from(std::env::var_os("HOME").context("coding-agent requires HOME")?)
+        .canonicalize()
+        .context("resolve HOME for coding-agent")?;
+    let cwd = std::env::current_dir().context("resolve coding-agent working directory")?;
+    let sensitive = [
+        ".ssh", ".aws", ".kube", ".docker", ".config", ".gnupg", ".local", ".cache", ".cargo",
+        ".rustup", ".pi", ".claude", ".codex", ".gemini", ".agents",
+    ];
+    if home.starts_with(&cwd)
+        || sensitive.iter().any(|name| {
+            let path = home.join(name);
+            cwd.starts_with(&path)
+                || path
+                    .canonicalize()
+                    .is_ok_and(|target| cwd.starts_with(target))
+        })
+        || ["/etc", "/run", "/proc", "/sys", "/dev"]
+            .iter()
+            .any(|p| cwd.starts_with(p))
+    {
+        bail!("coding-agent must run from a project directory, not home, an ancestor, or a configuration/credential directory");
+    }
+    Ok(())
+}
+
+/// Resolve version-manager PATH aliases without exposing /run/user sockets.
+fn agent_search_path() -> Result<String> {
+    let search = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = Vec::new();
+    for path in std::env::split_paths(&search) {
+        let path = path.canonicalize().unwrap_or(path);
+        if path.is_absolute() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    std::env::join_paths(paths)
+        .context("build coding-agent PATH")?
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("coding-agent PATH must be UTF-8"))
+}
+
+/// Expose selected executable files, not all of ~/.local/bin or a version
+/// manager's data. npm CLIs need both bin symlinks and node_modules intact.
+fn discover_agent_tools(paths: &mut Vec<String>) -> Result<()> {
+    let search = agent_search_path()?;
+    for name in ["claude", "codex", "gemini", "pi", "node", "uv", "rtk", "gh"] {
+        let Some(executable) = std::env::split_paths(&search)
+            .filter(|p| p.is_absolute())
+            .map(|p| p.join(name))
+            .find(|p| {
+                p.metadata()
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+        else {
+            continue;
+        };
+        let target = executable
+            .canonicalize()
+            .with_context(|| format!("resolve {}", executable.display()))?;
+        let bin = executable.parent().context("find executable directory")?;
+        let modules = target
+            .ancestors()
+            .find(|p| p.file_name().is_some_and(|n| n == "node_modules"));
+        let npm_bin = modules.is_some()
+            && bin.file_name().is_some_and(|n| n == "bin")
+            && bin
+                .parent()
+                .is_some_and(|p| p.join("lib/node_modules").is_dir());
+        // Binding an npm symlink as an individual file flattens the link,
+        // breaking imports relative to the original JS entry point.
+        let entry = if npm_bin { bin } else { executable.as_path() };
+        for path in [Some(entry), Some(target.as_path()), modules]
+            .into_iter()
+            .flatten()
+        {
+            let value = path.to_string_lossy().into_owned();
+            if !paths.contains(&value) {
+                paths.push(value);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Follow gh's Linux config precedence without mounting all of XDG_CONFIG_HOME.
+/// Inspect paths only; credential file contents never pass through playpen.
+fn github_config_dir() -> Result<PathBuf> {
+    let nonempty = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+    let home = PathBuf::from(std::env::var_os("HOME").context("coding-agent requires HOME")?);
+    let path = if let Some(dir) = nonempty("GH_CONFIG_DIR") {
+        PathBuf::from(dir)
+    } else if let Some(dir) = nonempty("XDG_CONFIG_HOME") {
+        PathBuf::from(dir).join("gh")
+    } else {
+        home.join(".config/gh")
+    };
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        || home.starts_with(&path)
+        || path == home.join(".config")
+        || path == home.join(".local")
+        || path == home.join(".local/share")
+        || [".ssh", ".aws", ".kube", ".docker", ".gnupg"]
+            .iter()
+            .any(|p| path.starts_with(home.join(p)))
+        || path.starts_with("/run")
+    {
+        bail!("GH_CONFIG_DIR must name a dedicated absolute GitHub CLI configuration directory, not a broad or credential directory");
+    }
+    if path.exists() && !path.is_dir() {
+        bail!(
+            "GitHub CLI configuration path is not a directory: {}",
+            path.display()
+        );
+    }
+    if path
+        .canonicalize()
+        .is_ok_and(|p| std::env::current_dir().is_ok_and(|cwd| cwd.starts_with(p)))
+    {
+        bail!("coding-agent must run from a project directory, not the GitHub CLI configuration directory");
+    }
+    Ok(path)
+}
+
+/// env -i is necessary: not capturing the shell environment does not remove
+/// secrets already inherited from the systemd user manager.
+fn agent_environment(
+    cli: &Run,
+    gh_config: &Path,
+    forward_github_token: bool,
+) -> Result<Vec<String>> {
+    let mut env = std::collections::BTreeMap::new();
+    if cli.capture_env {
+        for (key, value) in std::env::vars() {
+            if key != "DBUS_SESSION_BUS_ADDRESS"
+                && key != "GH_TOKEN"
+                && !(key.starts_with("BASH_FUNC_") && key.ends_with("%%"))
+            {
+                env.insert(key, value);
+            }
+        }
+    } else {
+        for key in [
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "TERM",
+            "COLORTERM",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TZ",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                env.insert(key.to_string(), value);
+            }
+        }
+        env.insert("SHELL".to_string(), "/bin/sh".to_string());
+        env.insert("TMPDIR".to_string(), "/tmp".to_string());
+        env.insert(
+            "XDG_CACHE_HOME".to_string(),
+            "/tmp/playpen-cache".to_string(),
+        );
+        env.insert(
+            "npm_config_cache".to_string(),
+            "/tmp/playpen-cache/npm".to_string(),
+        );
+        env.insert(
+            "UV_CACHE_DIR".to_string(),
+            "/tmp/playpen-cache/uv".to_string(),
+        );
+    }
+    let path = if cli.capture_env || cli.capture_path {
+        agent_search_path()?
+    } else {
+        "/usr/local/bin:/usr/bin:/bin".to_string()
+    };
+    env.insert("PATH".to_string(), path);
+    env.insert(
+        "GH_CONFIG_DIR".to_string(),
+        gh_config
+            .to_str()
+            .context("GitHub CLI configuration path must be UTF-8")?
+            .to_string(),
+    );
+    // Claude's legacy ~/.claude.json needs sibling lock files and atomic
+    // replacement. Use the mounted directory instead; never copy credentials.
+    let home = std::env::var("HOME").context("read HOME for coding-agent")?;
+    env.entry("CLAUDE_CONFIG_DIR".to_string())
+        .or_insert_with(|| format!("{home}/.claude"));
+    let mut prefix = vec!["/usr/bin/env".to_string(), "-i".to_string()];
+    if forward_github_token {
+        // GNU env expands this from the service environment without exposing
+        // the token in ExecStart, process arguments, or --dry-run output.
+        // Expansion is literal: spaces/metacharacters in values aren't parsed.
+        prefix.extend(["-S".to_string(), "-- GH_TOKEN=${GH_TOKEN}".to_string()]);
+    } else {
+        prefix.push("--".to_string());
+    }
+    prefix.extend(env.into_iter().map(|(k, v)| format!("{k}={v}")));
+    Ok(prefix)
 }
 
 // ============ CLI ============
@@ -320,6 +591,10 @@ struct Config {
     /// the home directory unrestricted.
     protect_home: Option<String>,
     protect_system: Option<String>,
+    /// An env -i command prefix for the coding-agent profile; empty otherwise.
+    command_prefix: Vec<String>,
+    /// Forward only the name to systemd-run; never put its secret value in argv.
+    forward_github_token: bool,
     private_tmp: bool,
     private_devices: bool,
     protect_kernel_tunables: bool,
@@ -348,7 +623,7 @@ impl Config {
     /// then `--current-dir-only`, then explicit per-setting flags. Command-line
     /// order is irrelevant — an explicit flag always beats the profile. Path
     /// flags (`--rw`/`--ro`/`--inaccessible`) accumulate rather than override.
-    fn resolve(cli: &Run) -> Config {
+    fn resolve(cli: &Run) -> Result<Config> {
         // Defaults: the four namespace protections are on; nothing else set.
         let mut c = Config {
             memory_max: None,
@@ -358,6 +633,8 @@ impl Config {
             io_write_bandwidth_max: None,
             protect_home: None,
             protect_system: None,
+            command_prefix: Vec::new(),
+            forward_github_token: false,
             private_tmp: true,
             private_devices: true,
             protect_kernel_tunables: true,
@@ -380,13 +657,37 @@ impl Config {
             c.cpu_quota = p.cpu_quota.map(String::from);
             c.memory_swap_max = p.memory_swap_max.map(String::from);
             c.protect_home = Some(p.protect_home.to_string());
+            c.protect_system = p.protect_system.map(String::from);
             c.private_network = p.private_network;
             c.bind_cwd = true;
-            for path in p.rw_paths {
-                push_if_exists(&mut c.bind_paths, path);
-            }
-            for path in p.ro_paths {
-                push_if_exists(&mut c.bind_ro_paths, path);
+            if p.agent_access {
+                // Otherwise env would print its environment, including GH_TOKEN.
+                if cli.command_and_args.is_empty() && !cli.dry_run {
+                    bail!("coding-agent requires a command after --");
+                }
+                validate_agent_workspace()?;
+                let gh_config = github_config_dir()?;
+                c.forward_github_token =
+                    std::env::var_os("GH_TOKEN").is_some_and(|v| !v.is_empty());
+                c.command_prefix = agent_environment(cli, &gh_config, c.forward_github_token)?;
+                push_agent_mount(&mut c.bind_ro_paths, &gh_config, &cli.ro_paths)?;
+                for path in p.rw_paths {
+                    push_agent_path(&mut c.bind_paths, path, &cli.rw_paths)?;
+                }
+                for path in p.ro_paths {
+                    push_agent_path(&mut c.bind_ro_paths, path, &cli.ro_paths)?;
+                }
+                discover_agent_tools(&mut c.bind_ro_paths)?;
+                // '-' tolerates absent sockets without a check/use race.
+                c.inaccessible_paths
+                    .extend(["-/run/docker.sock".to_string(), "-/run/podman".to_string()]);
+            } else {
+                for path in p.rw_paths {
+                    push_if_exists(&mut c.bind_paths, path);
+                }
+                for path in p.ro_paths {
+                    push_if_exists(&mut c.bind_ro_paths, path);
+                }
             }
         }
 
@@ -463,7 +764,7 @@ impl Config {
             c.memory_swap_max = Some("0".to_string());
         }
 
-        c
+        Ok(c)
     }
 
     /// Render the configuration as `systemd-run` `-p` property arguments.
@@ -486,10 +787,18 @@ impl Config {
         if self.io_read_bandwidth_max.is_some() || self.io_write_bandwidth_max.is_some() {
             if let Ok(pwd) = std::env::current_dir() {
                 if let Some(v) = &self.io_read_bandwidth_max {
-                    args.push(format!("-pIOReadBandwidthMax={} {}", pwd.display(), v));
+                    args.push(format!(
+                        "-pIOReadBandwidthMax={} {}",
+                        unit_path(&pwd.to_string_lossy()),
+                        v
+                    ));
                 }
                 if let Some(v) = &self.io_write_bandwidth_max {
-                    args.push(format!("-pIOWriteBandwidthMax={} {}", pwd.display(), v));
+                    args.push(format!(
+                        "-pIOWriteBandwidthMax={} {}",
+                        unit_path(&pwd.to_string_lossy()),
+                        v
+                    ));
                 }
             }
         }
@@ -513,10 +822,7 @@ impl Config {
         }
 
         if let Some(v) = self.private_network {
-            args.push(format!(
-                "-pPrivateNetwork={}",
-                if v { "yes" } else { "no" }
-            ));
+            args.push(format!("-pPrivateNetwork={}", if v { "yes" } else { "no" }));
         }
         for v in &self.ip_allow {
             args.push(format!("-pIPAddressAllow={}", v));
@@ -533,20 +839,39 @@ impl Config {
 
         if self.bind_cwd {
             if let Ok(pwd) = std::env::current_dir() {
-                args.push(format!("-pBindPaths={}", pwd.display()));
+                args.push(format!("-pBindPaths={}", unit_path(&pwd.to_string_lossy())));
             }
         }
         for p in &self.bind_paths {
-            args.push(format!("-pBindPaths={}", p));
+            args.push(format!("-pBindPaths={}", unit_path(p)));
         }
         for p in &self.bind_ro_paths {
-            args.push(format!("-pBindReadOnlyPaths={}", p));
+            args.push(format!("-pBindReadOnlyPaths={}", unit_path(p)));
         }
         for p in &self.inaccessible_paths {
-            args.push(format!("-pInaccessiblePaths={}", p));
+            args.push(format!("-pInaccessiblePaths={}", unit_path(p)));
         }
 
         args
+    }
+}
+
+/// Quote one path for systemd-run's property parser, not the invoking shell.
+/// Transient D-Bus path properties take literal '%' (unlike unit files).
+fn unit_path(path: &str) -> String {
+    let escaped = path
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    if path
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '\\' | '"' | '\'' | ':'))
+    {
+        format!("\"{escaped}\"")
+    } else {
+        escaped
     }
 }
 
@@ -577,13 +902,21 @@ fn shell_quote(s: &str) -> String {
 
 fn main() -> Result<()> {
     let cli = Run::parse();
+    let config = Config::resolve(&cli)?;
 
     let mut parts = vec!["systemd-run".to_string()];
     let base_command = "--user --same-dir --wait --pipe";
     parts.extend(base_command.split_whitespace().map(String::from));
 
     // Include all env vars in the calling environment
-    if cli.capture_env {
+    if !config.command_prefix.is_empty() {
+        // The coding-agent profile clears even the user manager's environment.
+        // Prevent systemd-run from expanding '$' in the env assignments/command.
+        parts.push("--expand-environment=no".to_string());
+        if config.forward_github_token {
+            parts.push("--setenv=GH_TOKEN".to_string());
+        }
+    } else if cli.capture_env {
         for (key, value) in std::env::vars() {
             // Skip the environment variables that systemd-run sets
             if key == "DBUS_SESSION_BUS_ADDRESS" {
@@ -610,7 +943,8 @@ fn main() -> Result<()> {
         parts.push("--quiet".to_string());
     }
 
-    parts.extend(Config::resolve(&cli).to_systemd_args());
+    parts.extend(config.to_systemd_args());
+    parts.extend(config.command_prefix);
     parts.extend(cli.command_and_args.clone());
 
     if cli.dry_run {

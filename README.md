@@ -40,8 +40,9 @@ cargo install --git https://github.com/cjrh/playpen
 
 ```
 $ playpen -h
-Usage: playpen [OPTIONS] [COMMAND_AND_ARGS]...
+Program launcher with memory, CPU, disk I/O, and path limits, built on systemd-run
 
+Usage: playpen [OPTIONS] [COMMAND_AND_ARGS]...
 
 Arguments:
   [COMMAND_AND_ARGS]...
@@ -64,7 +65,7 @@ Options:
       --capture-path <CAPTURE_PATH>
           [default: true] [possible values: true, false]
       --profile <NAME>
-          Use a predefined resource and filesystem profile
+          Use a predefined resource and filesystem profile. Valid profiles: cargo, npm, pytest, python, uv, go, make, coding-agent, shell
       --memory-swap-max <VALUE>
           Set MemorySwapMax limit (e.g., 0, 1G)
       --dry-run
@@ -76,13 +77,13 @@ Options:
       --inaccessible <INACCESSIBLE>
           Make path completely inaccessible (can be repeated)
       --private-tmp <PRIVATE_TMP>
-          Use private /tmp [default: true] [possible values: true, false]
+          Use private /tmp (default: true) [possible values: true, false]
       --private-devices <PRIVATE_DEVICES>
-          Use private /dev [default: true] [possible values: true, false]
+          Use private /dev (default: true) [possible values: true, false]
       --protect-kernel-tunables <PROTECT_KERNEL_TUNABLES>
-          Protect kernel tunables [default: true] [possible values: true, false]
+          Protect kernel tunables (default: true) [possible values: true, false]
       --protect-control-groups <PROTECT_CONTROL_GROUPS>
-          Protect control groups [default: true] [possible values: true, false]
+          Protect control groups (default: true) [possible values: true, false]
       --protect-home <PROTECT_HOME>
           Protect home directories: none/yes/read-only/tmpfs
       --protect-system <PROTECT_SYSTEM>
@@ -284,27 +285,130 @@ $ playpen --profile cargo --rw $HOME/.ccache -- cargo build
 
 ### AI Coding Agent Profile
 
-The `coding-agent` profile is designed for AI coding assistants. It hides the entire home directory by default (using `ProtectHome=tmpfs`) to prevent agents from reading secrets in dotfiles, then selectively exposes only what's needed for git operations:
+The `coding-agent` profile combines **4 GiB memory, 200% CPU, no swap**, a
+writable project, hidden home (`ProtectHome=tmpfs`), and a read-only system
+(`ProtectSystem=strict`). The usual private temporary storage/devices and
+kernel/control-group protections remain enabled. It requires **systemd 254+**
+(to disable command-line environment expansion).
 
-- `~/.gitconfig` (read-only) — git identity for commits
-- `~/.ssh` (read-only) — SSH keys for git push/pull
-- Current working directory (read-write) — your project code
-
-Agent-specific config directories are **not** included in the profile (for security — different agents shouldn't see each other's configs). You add only what your specific agent needs:
+Run it from a project directory, not home or a configuration directory:
 
 ```bash
-# Claude Code
-$ playpen --profile coding-agent --rw ~/.claude --ro ~/.claude.json -- claude
-
-# OpenAI Codex
-$ playpen --profile coding-agent --rw ~/.codex -- codex
-
-# Gemini CLI
-$ playpen --profile coding-agent --rw ~/.gemini -- gemini
-
-# pi
-$ playpen --profile coding-agent --rw ~/.pi -- pi
+playpen --profile coding-agent -- pi
+playpen --profile coding-agent -- codex
+playpen --profile coding-agent -- gemini
 ```
+
+Install and sign in to your agents on the host first. Existing paths are
+detected; missing paths are skipped, not created:
+
+| Access | Automatically exposed paths |
+|--------|-----------------------------|
+| Read-write | `~/.claude`, `~/.codex`, `~/.gemini` |
+| Read-write | `~/.pi/agent`, `~/.pi/context-mode`, `~/.pi/web-search-cache`, `~/.pi/web-search.json` |
+| Read-write | `~/.cargo/registry`, `~/.cargo/git` (not Cargo credentials/config) |
+| Read-only | **All of `~/.agents/`**, `~/.cargo/bin`, `~/.rustup`, `~/.local/share/claude` |
+| Read-only | Detected `claude`, `codex`, `gemini`, `pi`, `node`, `uv`, `rtk`, and `gh` executables from PATH; standard npm installation `bin` and `node_modules` directories |
+| Read-only | GitHub CLI configuration: `$GH_CONFIG_DIR`, otherwise `$XDG_CONFIG_HOME/gh`, otherwise `~/.config/gh` |
+
+These are **shared host directories for every detected agent**, not just the
+agent being launched. Their credentials, history, settings, plugins, and
+extensions are available to the sandbox; writable changes persist on the host.
+This profile is not a credential boundary between agents. Installations are
+read-only: update agents/toolchains outside playpen.
+
+Neither SSH keys nor AWS/Kubernetes credentials, `~/.gitconfig`,
+whole-home, or whole-user-runtime mounts are supplied. Read-only keys would
+still be readable, so they are not safe defaults. Rootful Docker's socket and
+`/run/podman` are masked; `ProtectHome` hides rootless sockets under `/run/user`.
+Git identity can be supplied per command, or deliberately exposed with
+`--ro "$HOME/.gitconfig"` after reviewing it for tokens/credential helpers.
+
+The child starts with `env -i`, clearing the systemd user manager's environment
+as well as avoiding shell-secret capture. Only home/user identity, terminal and
+locale variables, a canonicalized PATH, `/bin/sh`, private `/tmp` caches,
+Claude/GitHub config-directory settings, and an explicitly supplied `GH_TOKEN`
+are supplied. This resolves version-manager
+PATH aliases without mounting `/run/user`. `--capture-path false` uses a system
+PATH. **`--capture-env true` deliberately opts back into shell environment
+capture**, including credentials; never share its dry-run output. For narrow
+opt-ins, put assignments after the command separator, e.g.
+`-- env MY_SETTING=value pi`. Custom state locations need explicit `--rw` mounts
+and the corresponding environment assignment.
+
+#### GitHub CLI access
+
+`gh` is discovered on **PATH**; no personal installation directory is hard-coded.
+Native executables are mounted individually rather than exposing their siblings.
+Only the resolved GitHub config directory is mounted, not all of `~/.config` or
+`XDG_CONFIG_HOME`. It must be a dedicated absolute directory; broad paths and
+unreviewed symlinks are rejected. Missing configuration is not created.
+
+File-backed logins work through this read-only mount. **Read-only configuration
+does not mean read-only GitHub access**: the sandbox can use the stored token's
+full permissions, including remote writes. Local login/logout, config changes,
+and extension installation should be done outside playpen.
+
+Keyring-backed logins need an explicit per-run token because the host keyring
+and user bus stay hidden:
+
+```bash
+GH_TOKEN="$(gh auth token)" playpen --profile coding-agent -- pi
+# Or use gh directly:
+GH_TOKEN="$(gh auth token)" playpen --profile coding-agent -- gh repo view
+```
+
+Playpen never queries the keyring itself. If the launching shell supplies a
+nonempty `GH_TOKEN`, the coding-agent profile forwards it by name through
+`systemd-run --setenv=GH_TOKEN`. GNU `env -S` then retains only that token while
+clearing the inherited environment. Its value is **not embedded in command
+arguments or dry-run output**, including with `--capture-env true`. The token
+is still available to sandboxed processes through their environment, as intended;
+do not treat it as hidden from the agent. Other shell tokens are not automatically
+forwarded. This feature requires GNU `env` with `--split-string` support.
+
+#### Claude Code: one-time setup
+
+Claude's legacy `~/.claude.json` needs sibling lock files and atomic replacement.
+Binding that one file cannot support those operations, and making home writable
+would defeat the boundary. The profile therefore sets
+`CLAUDE_CONFIG_DIR="$HOME/.claude"` and does **not** mount or copy the legacy file.
+Initialize this configuration on the host before using the profile:
+
+```bash
+# Outside playpen: initialize/sign in with this config location.
+CLAUDE_CONFIG_DIR="$HOME/.claude" claude
+
+# Then run from your project.
+playpen --profile coding-agent -- claude
+```
+
+The relocated `.claude.json` lives inside the mounted `.claude` directory.
+Legacy preferences may need reconfiguration; playpen never migrates credentials.
+For a separate configuration, initialize it on the host and use
+`--rw /absolute/config-dir -- env CLAUDE_CONFIG_DIR=/absolute/config-dir claude`.
+Individual file mounts such as Pi's optional `web-search.json` likewise cannot
+be atomically replaced; edit such global settings outside the sandbox.
+
+#### Boundary and overrides
+
+- Network stays enabled for models, package downloads, and MCP. TCP host
+  services, other host sockets, and services reachable through shared agent
+  state can perform actions outside this filesystem boundary. This is **not a
+  hostile-code VM or network sandbox**.
+- Project files, including `.env`, repository credentials, and project-local
+  agent configuration, are available. Do not run from an overly broad directory.
+  Home/ancestors and common configuration/credential working directories are
+  rejected. Automatic state/toolchain directory symlinks require explicit mount
+  review rather than silently exposing their targets.
+- Extra tools, nonstandard installations, symlink targets, and custom state
+  locations may need narrow `--ro`/`--rw` mounts. Avoid exposing all of home,
+  `/run/user`, or Docker to work around a missing dependency.
+- Explicit resource/protection flags still override the profile regardless of
+  order; path flags accumulate. Broad mounts or weaker flags deliberately weaken
+  the boundary. No disk-I/O cap is imposed by default; add `-d 50M` if wanted.
+
+Inspect the actual mounts with `playpen --profile coding-agent --dry-run -- pi`.
 
 ### Shell Profile
 
@@ -331,10 +435,13 @@ $ playpen --profile cargo --dry-run -- cargo build
 
 ### Symlinked Dotfiles
 
-With `ProtectHome=tmpfs`, home directories are replaced by an empty tmpfs. If a path like `~/.claude.json` is a symlink (e.g., `~/.claude.json -> stowfiles/.claude.json`), bind-mounting only the symlink will create a broken link because the target is also under the hidden `/home` tree. To fix this, also bind-mount the target directory:
+With `ProtectHome=tmpfs`, home directories are hidden. Symlinked dotfiles and
+their targets may need explicit mounts, depending on where the link is used.
+Review and expose only the necessary target, rather than the whole dotfiles tree.
+For example, for `~/.gitconfig -> stowfiles/.gitconfig`:
 
 ```bash
-$ playpen --profile coding-agent --ro ~/.claude.json --ro ~/stowfiles -- claude
+$ playpen --current-dir-only --ro ~/.gitconfig --ro ~/stowfiles/.gitconfig -- git status
 ```
 
 ## Path Restrictions
@@ -704,20 +811,17 @@ playpen --profile pytest -- pytest
 
 ### Running an AI coding agent
 
-Use the `coding-agent` profile, then add the config directories for your specific agent. The profile hides the entire home directory by default, then selectively exposes git config and SSH keys needed for git operations.
+Use the `coding-agent` profile from your project. It detects common installed
+agents and shares their existing state, but does not expose SSH keys or unrelated
+home configuration. See [AI Coding Agent Profile](#ai-coding-agent-profile) for
+the access boundary and Claude's one-time configuration setup.
 
-```
-# Claude Code
-playpen --profile coding-agent --rw ~/.claude --ro ~/.claude.json -- claude
-
-# OpenAI Codex
-playpen --profile coding-agent --rw ~/.codex -- codex
-
-# Gemini CLI
-playpen --profile coding-agent --rw ~/.gemini -- gemini
-
-# pi
-playpen --profile coding-agent --rw ~/.pi -- pi
+```bash
+playpen --profile coding-agent -- pi
+playpen --profile coding-agent -- codex
+playpen --profile coding-agent -- gemini
+# After the documented host setup:
+playpen --profile coding-agent -- claude
 ```
 
 ### Interactive shell session
